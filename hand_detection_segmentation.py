@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 from collections import deque
 
-# from background_remove import remove_background
+### Segmentation based palm detection
 
 # Configuration
 wrist_extension_ratio = 1.2
