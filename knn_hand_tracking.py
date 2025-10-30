@@ -253,8 +253,12 @@ print("  TRANSLATE     → 3D translation")
 print("  ROTATE        → 3D yaw control")
 print("="*60 + "\n")
 
+# Before the main loop, open a file for writing
+output_file = open('thumb_tracking.txt', 'w')
+output_file.write("# Thumb Tracking Data\n")
+output_file.write("# thumb_tip_x, thumb_tip_y, thumb_tip_z\n")
 
-#MAIN LOOP--------------------------------------------------------------
+# MAIN LOOP--------------------------------------------------------------
 while cap.isOpened():
     ret, frame = cap.read()
     if not ret:
@@ -264,6 +268,16 @@ while cap.isOpened():
     rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
     detection_result = detector.detect(mp_image)
+
+        # Save thumb tip position (landmark 4)
+    if detection_result.hand_world_landmarks:
+        for hand_landmarks in detection_result.hand_world_landmarks:
+            thumb_tip = hand_landmarks[4]  # Thumb tip is landmark index 4
+            
+            # Write to file: timestamp, x, y, z (in meters)
+            output_file.write(f"{thumb_tip.x:.6f}, {thumb_tip.y:.6f}, {thumb_tip.z:.6f}\n")
+            output_file.flush()  # Ensure data is written immediately
+
     annotated_frame = draw_landmarks_on_image(rgb_frame, detection_result)
 
     if detection_result.hand_landmarks:
@@ -379,8 +393,11 @@ while cap.isOpened():
     if k == ord('q'):
         if knn_static.is_trained:
             knn_static.save("gesture_static.pkl")
+            print("[INFO] static gesture saved")
         if knn_dynamic.is_trained:
             knn_dynamic.save("gesture_dynamic.pkl")
+            print("[INFO] dynamic gesture saved")
+
         print("[INFO] Quitting...")
         break
     
@@ -401,3 +418,5 @@ writer.release()
 cap.release()
 cv2.destroyAllWindows()
 detector = None
+
+output_file.close()
