@@ -45,29 +45,42 @@ THUMB, INDEX, MIDDLE, RING, PINKY = 0, 1, 2, 3, 4
 #KNN CLASSES------------------------------------------------------------------------------------
 class KNNGesture:
     def __init__(self, n_neighbors=5):
+        self.base_k = n_neighbors  # remember requested k
         self.scaler = StandardScaler()
         self.clf = KNeighborsClassifier(n_neighbors=n_neighbors, weights='distance')
-        self.X = []
-        self.y = []
+        self.X, self.y = [], []
         self.is_trained = False
+        
+    def _effective_k(self):
+        # determine k <= number of fitted samples (and >=1)
+        nfit = len(getattr(self.clf, "_fit_X", []))
+        return max(1, min(self.base_k, nfit)) if nfit else 1
 
+    def _apply_k(self):
+        # update the classifier's k right before use
+        k_eff = self._effective_k()
+        if getattr(self.clf, "n_neighbors", None) != k_eff:
+            self.clf.n_neighbors = k_eff  # safe to tweak between calls
+            
     def add_sample(self, feats, label):
         self.X.append(feats.astype(np.float32))
         self.y.append(label)
 
     def fit(self):
         if len(self.X) < 2:
-            print("[WARN] Not enough samples to train")
+            print("[WARN] not enough samples to train")
             return
         X = np.stack(self.X, axis=0)
         Xs = self.scaler.fit_transform(X)
         self.clf.fit(Xs, np.array(self.y))
         self.is_trained = True
-        print(f"[INFO] Trained KNN: {len(self.y)} samples, classes={sorted(set(self.y))}")
+        self._apply_k()  # clamp k to len(fit)
+        print(f"[INFO] trained knn on {len(self.y)} samples, classes={sorted(set(self.y))}")
 
     def predict(self, feats):
-        if not self.is_trained:
-            return None, 0.0
+        if not self.is_trained or not hasattr(self.clf, "_fit_X") or len(self.clf._fit_X) == 0:
+            return "none", 0.0  # CHANGED: was None, 0.0
+        self._apply_k()  # re-clamp in case you've added more later
         fs = self.scaler.transform(feats.reshape(1, -1))
         pred = self.clf.predict(fs)[0]
         proba = float(self.clf.predict_proba(fs).max()) if hasattr(self.clf, "predict_proba") else 0.0
@@ -75,17 +88,21 @@ class KNNGesture:
     
     def save(self, path="gesture_knn.pkl"):
         if not self.is_trained:
-            print("[WARN] Model not trained, nothing saved")
+            print("[WARN] model not trained. nothing saved")
             return
-        payload = {"scaler": self.scaler, "clf": self.clf}
+        payload = {
+            "scaler": self.scaler,
+            "clf": self.clf,
+            "feature_dim": self.clf._fit_X.shape[1] if hasattr(self.clf, "_fit_X") else None,  # NEW
+        }
         with open(path, "wb") as f:
             pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
-        print(f"[INFO] Saved model → {path}")
+        print(f"[INFO] saved model → {os.path.abspath(path)}")
 
     @classmethod
     def load(cls, path="gesture_knn.pkl"):
         if not os.path.isfile(path):
-            print(f"[INFO] No saved model at {path}")
+            print(f"[INFO] no saved model at {path}")
             return None
         with open(path, "rb") as f:
             payload = pickle.load(f)
@@ -93,7 +110,7 @@ class KNNGesture:
         obj.scaler = payload["scaler"]
         obj.clf = payload["clf"]
         obj.is_trained = True
-        print(f"[INFO] Loaded model ← {path}")
+        print(f"[INFO] loaded model ← {os.path.abspath(path)}")
         return obj
 
 
@@ -165,31 +182,66 @@ def palm_facing_camera(result):
     nz_palm = np.cross(v1,v2)[2]
     
     return (nz_palm <= 0) if hand == "Right" else (nz_palm >= 0)
-        
+
+def finger_extended_mask(rel):
+    # thumb uses cmc→mcp vs cmc→tip; others use mcp→pip vs mcp→tip
+    chains = [
+        (CMC[0],        MCP[THUMB],  FINGERTIPS[THUMB]),   # thumb:  cmc, mcp, tip
+        (MCP[INDEX],    PIP[0],      FINGERTIPS[INDEX]),   # index:  mcp, pip, tip
+        (MCP[MIDDLE],   PIP[1],      FINGERTIPS[MIDDLE]),  # middle: mcp, pip, tip
+        (MCP[RING],     PIP[2],      FINGERTIPS[RING]),    # ring:   mcp, pip, tip
+        (MCP[PINKY],    PIP[3],      FINGERTIPS[PINKY]),   # pinky:  mcp, pip, tip
+    ]
+    mask = np.zeros(5, dtype=bool)
+
+    min_tip_mcp  = 0.35   # tip–mcp span (in base_span units)
+    max_bend_deg = 50.0   # smaller = straighter finger
+
+    for i, (a, b, t) in enumerate(chains):
+        v1 = rel[t] - rel[a]                      # direction to tip
+        v2 = rel[b] - rel[a]                      # direction to next joint
+        n1 = np.linalg.norm(v1) or 1e-6
+        n2 = np.linalg.norm(v2) or 1e-6
+        cosang = np.clip(np.dot(v1, v2) / (n1*n2), -1.0, 1.0)
+        bend = np.degrees(np.arccos(cosang))      # bend angle at 'a'
+        tip_mcp = np.linalg.norm(rel[t] - rel[a]) # straightness proxy
+
+        # finger is 'extended' if long and straight enough
+        mask[i] = (tip_mcp >= min_tip_mcp) and (bend <= max_bend_deg)
+
+    return mask        
 
 def extract_features_from_hand(hand_landmarks):
+    """ build a compact, scale/translation-invariant feature vector. """
     pts = np.array([[lm.x, lm.y, getattr(lm, "z", 0.0)] for lm in hand_landmarks], dtype=np.float32)
-
-    wrist = pts[WRIST].copy()
-    rel = pts - wrist
+    rel = pts - pts[WRIST]
     base_span = np.linalg.norm(pts[5] - pts[17]) or 1e-6
     rel /= base_span
 
     def angle(a, b, c):
         v1, v2 = a - b, c - b
-        n1, n2 = np.linalg.norm(v1) or 1e-6, np.linalg.norm(v2) or 1e-6
-        return np.arccos(np.clip(np.dot(v1, v2) / (n1 * n2), -1.0, 1.0))
+        n1 = np.linalg.norm(v1) or 1e-6
+        n2 = np.linalg.norm(v2) or 1e-6
+        cosang = np.clip(np.dot(v1, v2) / (n1*n2), -1.0, 1.0)
+        return np.arccos(cosang)
 
-    angles = np.array([
-        angle(rel[1], rel[2], rel[3]),   # thumb
-        angle(rel[0], rel[5], rel[6]),   # index
-        angle(rel[0], rel[9], rel[10]),  # middle
-        angle(rel[0], rel[13], rel[14]), # ring
-        angle(rel[0], rel[17], rel[18])  # pinky
-    ], dtype=np.float32)
+    thumb_ang = angle(rel[1],  rel[2],  rel[3])
+    idx_ang   = angle(rel[0],  rel[5],  rel[6])
+    mid_ang   = angle(rel[0],  rel[9],  rel[10])
+    ring_ang  = angle(rel[0],  rel[13], rel[14])
+    pinky_ang = angle(rel[0],  rel[17], rel[18])
+    angles = np.array([thumb_ang, idx_ang, mid_ang, ring_ang, pinky_ang], dtype=np.float32)
 
-    return np.concatenate([rel.flatten(), angles], axis=0)
+    # NEW: per-finger bits + count
+    ext_bits = finger_extended_mask(rel).astype(np.float32)
+    ext_count = np.array([ext_bits.sum() / 5.0], dtype=np.float32)
 
+    # 63 rel coords + 5 angles + 5 bits + 1 count = 74 features
+    feats = np.concatenate([rel.flatten(), angles, ext_bits, ext_count], axis=0)
+    return feats
+
+def kn_ready(kn):
+    return kn and kn.is_trained and hasattr(kn.clf, "_fit_X") and len(kn.clf._fit_X) >= 1
 
 #MAIN SETUP----------------------------------------------------------------------------------------------------
 
@@ -210,9 +262,9 @@ base_options = python.BaseOptions(model_asset_path=model_path)
 options = vision.HandLandmarkerOptions(base_options=base_options, num_hands=2)
 detector = vision.HandLandmarker.create_from_options(options)
 
-# Video writer
-fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-writer = cv2.VideoWriter("annotated.mp4", fourcc, fps, (w, h))
+# # Video writer
+# fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+# writer = cv2.VideoWriter("annotated.mp4", fourcc, fps, (w, h))
 
 # Controls
 STATIC_GESTURE_KEYS = {
@@ -330,6 +382,13 @@ while cap.isOpened():
             # Extract features
             feats = extract_features_from_hand(hand)
 
+            # rebuild rel for the quick guard 
+            pts = np.array([[lm.x, lm.y, getattr(lm, "z", 0.0)] for lm in hand], dtype=np.float32)
+            rel = pts - pts[WRIST]
+            rel /= (np.linalg.norm(pts[5] - pts[17]) or 1e-6)
+            ext_bits = finger_extended_mask(rel)
+            ext_cnt  = int(ext_bits.sum())
+
             # === RECORDING MODE ===
             if recording and samples_left > 0:
                 if gesture_type == "static":
@@ -350,16 +409,24 @@ while cap.isOpened():
             
             # === PREDICTION ===
             pred, conf = ("none", 0.0)
-            
-            if gesture_type == "static" and knn_static.is_trained:
+            speed = np.linalg.norm(v) if v is not None else 0.0
+            gesture_type = "dynamic" if speed > 0.02 else "static"
+
+            if gesture_type == "static" and kn_ready(knn_static):  # Use kn_ready instead of is_trained
                 pred, conf = knn_static.predict(feats)
-                if pred in ("STOP", "HOLD") and not palm_facing_camera(detection_result):
+
+                if pred in ("STOP", "GO") and not palm_facing_camera(detection_result):
                     pred, conf = "none", 0.0
-                if conf < MIN_STATIC_CONF:
+
+                # NEW: Finger count validation
+                if 1 <= ext_cnt <= 4 and pred == "STOP":
                     pred = "none"
 
-            elif gesture_type == "dynamic" and knn_dynamic.is_trained:
-                motion_feats = v if v is not None else np.zeros(3)
+                if conf < 0.90:
+                    pred = "none"
+
+            elif gesture_type == "dynamic" and kn_ready(knn_dynamic):  # Use kn_ready
+                motion_feats = v if v is not None else np.zeros(3, dtype=np.float32)
                 combined = np.concatenate([feats, motion_feats])
                 pred, conf = knn_dynamic.predict(combined)
 
@@ -443,7 +510,7 @@ while cap.isOpened():
             annotated_frame = draw_gesture_label(annotated_frame, hand, label_text)
 
     output_frame = cv2.cvtColor(annotated_frame, cv2.COLOR_RGB2BGR)
-    writer.write(output_frame)
+    # writer.write(output_frame)
     cv2.imshow('3D Gesture Control', output_frame)
 
     # Keyboard
@@ -473,7 +540,7 @@ while cap.isOpened():
         wrist_tracker.reset_filter()
         print("[INFO] Filter reset")
 
-writer.release()
+# writer.release()
 cap.release()
 cv2.destroyAllWindows()
 detector = None
