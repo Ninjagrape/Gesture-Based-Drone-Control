@@ -3,8 +3,8 @@ import numpy as np
 import mediapipe as mp
 
 # Configuration
-MIN_CONTOUR_AREA = 4000       # ignore tiny contours
-MAX_CONTOUR_AREA_FR = 0.5     # ignore contours covering >50% of frame
+MIN_CONTOUR_AREA = 3000       # ignore tiny contours
+MAX_CONTOUR_AREA_FR = 0.5    # ignore contours covering >50% of frame
 SKIN_KERNEL_SIZE = 5          # morphological kernel for cleaning
 ROI_MIN_SIZE = 120            # smallest accepted palm box side
 ROI_TARGET_SIZE = 256         # MediaPipe input size
@@ -251,11 +251,13 @@ def main():
     face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
     tracker = PalmTracker(alpha=SMOOTHING_ALPHA)
 
-    print("=" * 60)
+    print("=" * 70)
     print("Hand detection")
-    print("=" * 60)
+    print("=" * 70)
 
     show_debug = True
+    # persistence buffer
+    last_rects = []  
 
     with mp_hands.Hands(static_image_mode=False,
                         max_num_hands=MAX_HANDS,
@@ -274,38 +276,84 @@ def main():
             rects_raw, mask, faces = detect_palm_regions(frame, face_cascade)
             rects_smooth = tracker.update(rects_raw)
 
-            # Skin mask visual
+            if rects_smooth:
+                last_rects = rects_smooth
+            elif len(last_rects) > 0:
+                rects_smooth = last_rects[-2:]
+            else:
+                rects_smooth = []
+
+            # Skin mask
             if show_debug:
                 for (x, y, fw, fh) in faces:
-                    cv2.rectangle(frame, (x, y), (x+fw, y+fh), (0, 0, 255), 2)
-                small_mask = cv2.cvtColor(cv2.resize(mask, (200, 150)), cv2.COLOR_GRAY2BGR)
-                frame[10:160, 10:210] = small_mask
+                    cv2.rectangle(frame, (x, y), (x + fw, y + fh), (0, 0, 255), 2)
+                sm = cv2.cvtColor(cv2.resize(mask, (200, 150)), cv2.COLOR_GRAY2BGR)
+                frame[10:160, 10:210] = sm
                 cv2.putText(frame, "Skin Mask", (15, 25),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
 
-            # MediaPipe Landmarks visual
-            for rect in rects_smooth:
-                axb, poly = rect_to_box_points(*rect)
-                cv2.polylines(frame, [poly], True, (0, 255, 0), 2)
-                cx, cy, w, h, ang = rect
-                cv2.circle(frame, (int(cx), int(cy)), 4, (255, 0, 255), -1)
+            # Hand Detection
+            any_detected = False
+            if rects_smooth:
+                for rect in rects_smooth:
+                    cx, cy, w, h, ang = rect
+                    roi, Minv, crop_origin, _ = extract_upright_palm_roi(frame, rect)
+                    if roi is None:
+                        continue
 
-                roi, Minv, crop_origin, _ = extract_upright_palm_roi(frame, rect)
-                if roi is None:
-                    continue
+                    result = run_mediapipe_hands(mp_detector, roi)
+                    if result.multi_hand_landmarks:
+                        any_detected = True
+                        # Palm dection with mediapipe landmark
+                        axb, poly = rect_to_box_points(*rect)
+                        cv2.polylines(frame, [poly], True, (0, 255, 0), 2)
+                        cv2.circle(frame, (int(cx), int(cy)), 4, (255, 0, 255), -1)
 
-                result = run_mediapipe_hands(mp_detector, roi)
-                if result.multi_hand_landmarks:
-                    for hand_lms in result.multi_hand_landmarks:
-                        pts = map_landmarks_to_frame(hand_lms, Minv, crop_origin, (roi.shape[1], roi.shape[0]))
-                        for p in pts:
-                            cv2.circle(frame, p, 3, (0, 200, 255), -1)
-                        draw_hand_connections(frame, pts)
+                        for hand_lms in result.multi_hand_landmarks:
+                            pts = map_landmarks_to_frame(
+                                hand_lms, Minv, crop_origin, (roi.shape[1], roi.shape[0])
+                            )
+                            for p in pts:
+                                cv2.circle(frame, p, 3, (0, 200, 255), -1)
+                            draw_hand_connections(frame, pts)
+                    else:
+                        # Fallback to mediapipe if no palm detected
+                        fallback_result = mp_detector.process(convert_bgr_to_rgb(frame))
+                        if fallback_result.multi_hand_landmarks:
+                            any_detected = True
+                            for hand_lms in fallback_result.multi_hand_landmarks:
+                                # Compute bounding box from landmarks
+                                xs = [lm.x * W for lm in hand_lms.landmark]
+                                ys = [lm.y * H for lm in hand_lms.landmark]
+                                x1, y1 = int(min(xs)), int(min(ys))
+                                x2, y2 = int(max(xs)), int(max(ys))
+                                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                                for p in zip(xs, ys):
+                                    cv2.circle(frame, (int(p[0]), int(p[1])), 2, (0, 200, 255), -1)
+                                draw_hand_connections(frame, [(int(x), int(y)) for x, y in zip(xs, ys)])
 
-            # Status info
-            cv2.putText(frame, f"Hands:{len(rects_smooth)} α:{tracker.alpha:.2f}",
-                        (12, H - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-            cv2.imshow("Palm and hand landmarks", frame)
+            # Fallback to mediapipe to feed whole frame to mediapipe
+            if not any_detected:
+                fallback_result = mp_detector.process(convert_bgr_to_rgb(frame))
+                if fallback_result.multi_hand_landmarks:
+                    for hand_lms in fallback_result.multi_hand_landmarks:
+                        any_detected = True
+                        xs = [lm.x * W for lm in hand_lms.landmark]
+                        ys = [lm.y * H for lm in hand_lms.landmark]
+                        x1, y1 = int(min(xs)), int(min(ys))
+                        x2, y2 = int(max(xs)), int(max(ys))
+                        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+
+                        for p in zip(xs, ys):
+                            cv2.circle(frame, (int(p[0]), int(p[1])), 2, (0, 200, 255), -1)
+                        draw_hand_connections(frame, [(int(x), int(y)) for x, y in zip(xs, ys)])
+
+            # Display info
+            #fps = cap.get(cv2.CAP_PROP_FPS)
+            #cv2.putText(frame, f"Hands: {len(rects_smooth)}  FPS: {fps:.1f}",
+            #    (12, H - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+
+            cv2.imshow("Hand tracking", frame)
 
             key = cv2.waitKey(1) & 0xFF
             if key == ord('q'):
@@ -313,6 +361,7 @@ def main():
 
     cap.release()
     cv2.destroyAllWindows()
+
 
 # 
 if __name__ == "__main__":
