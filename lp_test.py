@@ -7,7 +7,30 @@ and visualizes the smoothing effect.
 
 import numpy as np
 import matplotlib.pyplot as plt
+import re
+
 from lp_filt import VelocityBasedLowPassFilter, OneEuroFilter, SimpleEMA
+
+def test_filters_rot(filename, keypoint='Wrist'):
+    # Regex to extract "[x, y, z]" after the given keypoint label
+    pattern = re.compile(rf'{keypoint}:\s*\[([^\]]+)\]')
+
+    data = []
+    with open(filename, 'r') as f:
+        for line in f:
+            if not line.strip():
+                continue
+
+            match = pattern.search(line)
+            if not match:
+                continue  # skip if that keypoint wasn't detected in this frame
+
+            coords = [float(x.strip()) for x in match.group(1).split(',')]
+            data.append(coords)
+
+    data = np.array(data)
+    print(f"Loaded {len(data)} frames of '{keypoint}' keypoint from {filename}")
+    return data
 
 
 def load_thumb_data(filename):
@@ -179,5 +202,8 @@ def plot_results(results):
 
 if __name__ == '__main__':
     # Load data from file
-    results = test_filters('thumb_tracking.txt')
+
+    # results = test_filters('thumb_tracking.txt')
+    results = test_filters('hand_keypoints_pinky.txt')
+
     plot_results(results)
