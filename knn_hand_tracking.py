@@ -15,12 +15,14 @@ from collections import deque
 import pickle 
 import os
 import math
+import time
 
 from sklearn.preprocessing import StandardScaler
 from sklearn.neighbors import KNeighborsClassifier
 
 # IMPORT DEPTH TRACKING MODULE
 from monocular_depth_tracking import Wrist3DTracker
+from lp_filt import OneEuroFilter
 
 #LANDMARK GLOBALS--------------------------------------------------------------------------------------
 WRIST = 0
@@ -190,6 +192,7 @@ def extract_features_from_hand(hand_landmarks):
 
 
 #MAIN SETUP----------------------------------------------------------------------------------------------------
+
 cap = cv2.VideoCapture(0)
 fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
 w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -238,6 +241,21 @@ temporal_multi = GestureHands()
 stable_label = None
 gesture_stage = "idle"
 
+
+filters = [
+    OneEuroFilter(
+        min_cutoff=1.0,
+        beta=0.007 if i == 0 else 0.05,  # wrist (index 0) gets higher responsiveness
+        d_cutoff=1.0
+    )
+    for i in range(21)
+]
+
+# Gesture recognition debouncer (per-hand)
+gesture_hold_start = {}           # map: hand_index -> (candidate_label, start_time)
+GESTURE_CONFIRM_TIME = 0.25        # seconds to confirm a mode gesture
+
+
 print("\n" + "="*60)
 print("3D GESTURE CONTROL SYSTEM (MODULAR)")
 print("="*60)
@@ -269,14 +287,30 @@ while cap.isOpened():
     mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
     detection_result = detector.detect(mp_image)
 
-        # Save thumb tip position (landmark 4)
+    # Save thumb tip position (landmark 4)
     if detection_result.hand_world_landmarks:
         for hand_landmarks in detection_result.hand_world_landmarks:
-            thumb_tip = hand_landmarks[4]  # Thumb tip is landmark index 4
+            thumb_tip = hand_landmarks[0]  # Thumb tip is landmark index 4
             
             # Write to file: timestamp, x, y, z (in meters)
             output_file.write(f"{thumb_tip.x:.6f}, {thumb_tip.y:.6f}, {thumb_tip.z:.6f}\n")
             output_file.flush()  # Ensure data is written immediately
+
+
+    # Filter all landmarks here
+    if detection_result.hand_world_landmarks:
+        for hand_landmarks in detection_result.hand_world_landmarks:
+            timestamp = time.time()
+
+            for i, landmark in enumerate(hand_landmarks):
+                # Convert to numpy array
+                pos = np.array([landmark.x, landmark.y, landmark.z])
+                
+                # Apply filter
+                filtered_pos = filters[i].update(pos, timestamp)
+
+                # Replace landmark values in-place
+                landmark.x, landmark.y, landmark.z = filtered_pos
 
     annotated_frame = draw_landmarks_on_image(rgb_frame, detection_result)
 
@@ -330,18 +364,43 @@ while cap.isOpened():
                 pred, conf = knn_dynamic.predict(combined)
 
             # === GESTURE STATE MACHINE ===
+            # We keep a separate hold timer per hand index `hi` so multiple hands work correctly.
             if gesture_type == "static" and pred != "none" and conf >= MIN_STATIC_CONF:
+                # Immediate exit gestures
                 if pred in EXIT_GESTURES:
                     gesture_stage = "idle"
                     stable_label = pred
                     wrist_tracker.clear_reference()
-                    
+                    # clear any pending hold for this hand
+                    gesture_hold_start.pop(hi, None)
+
+                # Mode gestures require confirmation (debounce)
                 elif pred in MODE_GESTURES:
                     new_stage = MODE_GESTURES[pred]
-                    if gesture_stage != new_stage:
-                        gesture_stage = new_stage
-                        stable_label = pred
-                        wrist_tracker.set_reference(pos_3d)
+                    entry = gesture_hold_start.get(hi)
+
+                    # If different candidate or first time, start or restart timer
+                    if entry is None or entry[0] != pred:
+                        gesture_hold_start[hi] = (pred, time.time())
+                        stable_label = pred  # immediate UI feedback (not yet confirmed)
+                    else:
+                        # same candidate, check elapsed time
+                        _, t0 = entry
+                        elapsed = time.time() - t0
+                        if elapsed >= GESTURE_CONFIRM_TIME:
+                            # Confirm the change only once
+                            if gesture_stage != new_stage:
+                                gesture_stage = new_stage
+                                stable_label = pred
+                                # Only set reference if we have a valid 3D position
+                                if pos_3d is not None:
+                                    wrist_tracker.set_reference(pos_3d)
+                            # remove the hold timer so it won't re-trigger
+                            gesture_hold_start.pop(hi, None)
+            else:
+                # If prediction disappears / low confidence / non-static => reset any pending hold for this hand
+                gesture_hold_start.pop(hi, None)
+
 
             # === USE 3D TRACKING ===
             if gesture_stage in ["changing_speed", "translating", "rotating"]:
@@ -366,9 +425,9 @@ while cap.isOpened():
                 if displacement_info:
                     y_offset = h - 120
                     cv2.putText(annotated_frame, f"Displacement:", (10, y_offset), 
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,0), 2)
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,0,0), 2)
                     cv2.putText(annotated_frame, f"X:{displacement_info['dx']:+.1f} Y:{displacement_info['dy']:+.1f} Z:{displacement_info['dz']:+.1f}cm", 
-                               (10, y_offset+20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255), 1)
+                               (10, y_offset+20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,0,0), 1)
 
             # Display info
             cv2.putText(annotated_frame, f"3D: X={pos_3d[0]:.1f} Y={pos_3d[1]:.1f} Z={pos_3d[2]:.1f}cm", 
