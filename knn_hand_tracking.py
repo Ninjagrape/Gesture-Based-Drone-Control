@@ -22,9 +22,12 @@ from sklearn.neighbors import KNeighborsClassifier
 
 # IMPORT DEPTH TRACKING MODULE
 from monocular_depth_tracking import Wrist3DTracker
-
 from orientation_tracking import HandOrientationTracker
+
 from lp_filt import OneEuroFilter
+
+from drone_simulator import DroneSimulator
+
 
 #LANDMARK GLOBALS--------------------------------------------------------------------------------------
 WRIST = 0
@@ -258,6 +261,10 @@ wrist_tracker = Wrist3DTracker(frame_width=w)
 # Initialise orientationn tracker
 orientation_tracker = HandOrientationTracker(deadzone_degrees=10.0)
 
+# Initialize drone simulator
+drone_sim = DroneSimulator(window_size=(800, 600))
+print("[INFO] Drone simulator initialized")
+
 
 # MediaPipe setup - handle Windows path issues
 model_path = 'hand_landmarker.task'
@@ -345,7 +352,7 @@ while cap.isOpened():
     mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
     detection_result = detector.detect(mp_image)
 
-    # Save thumb tip position (landmark 4)
+    # Save landmark position to txt file for filter tuning
     if detection_result.hand_world_landmarks:
         for hand_landmarks in detection_result.hand_world_landmarks:
             thumb_tip = hand_landmarks[0]  # Thumb tip is landmark index 4
@@ -499,7 +506,21 @@ while cap.isOpened():
                         # Format magnitude based on command type
                         unit = "deg" if cmd in ["YAW LEFT", "YAW RIGHT", "ROLL LEFT", "ROLL RIGHT", "PITCH UP", "PITCH DOWN"] else "cm"
                         print(f"[CMD] {cmd} ({magnitude:.1f}{unit})")
+                        
+                        # Send to simulator
+                        drone_sim.process_command(cmd, magnitude)
+
                         stable_label = cmd
+
+                        if stable_label:
+                            # Safely handle optional magnitude/unit
+                            try:
+                                cmd_text = f"Cmd: {stable_label} ({magnitude:.1f}{unit})"
+                            except NameError:
+                                cmd_text = f"Cmd: {stable_label}"
+                            
+                            cv2.putText(annotated_frame, cmd_text, 
+                                    (10, h - 35), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,0), 2)
                 
                 # Display displacement
                 if displacement_info:
@@ -514,9 +535,8 @@ while cap.isOpened():
                        (10, h - 80), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,255,255), 1)
             cv2.putText(annotated_frame, f"Mode: {gesture_stage}", 
                        (10, h - 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,255), 2)
-            if stable_label:
-                cv2.putText(annotated_frame, f"Cmd: {stable_label}", 
-                           (10, h - 35), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,0), 2)
+            
+
 
             # Draw gesture label
             label_text = f"{pred} ({conf:.2f})" if pred != "none" else "none"
@@ -525,6 +545,11 @@ while cap.isOpened():
     output_frame = cv2.cvtColor(annotated_frame, cv2.COLOR_RGB2BGR)
     # writer.write(output_frame)
     cv2.imshow('3D Gesture Control', output_frame)
+
+    # Render drone simulator
+    if not drone_sim.render():
+        print("[INFO] Simulator window closed")
+        break
 
     # Keyboard
     k = cv2.waitKey(1) & 0xFF

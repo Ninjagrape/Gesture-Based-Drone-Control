@@ -203,7 +203,7 @@ def plot_results(results):
 if __name__ == '__main__':
     # Load data from file
 
-    # results = test_filters('thumb_tracking.txt')
-    results = test_filters('hand_keypoints_pinky.txt')
+    results = test_filters('thumb_tracking.txt')
+    # results = test_filters('hand_keypoints_pinky.txt')
 
     plot_results(results)
