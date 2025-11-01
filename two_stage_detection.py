@@ -4,12 +4,12 @@ import mediapipe as mp
 
 # Configuration
 MIN_CONTOUR_AREA = 3000       # ignore tiny contours
-MAX_CONTOUR_AREA_FR = 0.5    # ignore contours covering >50% of frame
+MAX_CONTOUR_AREA_FR = 0.2    # ignore contours covering >20% of frame
 SKIN_KERNEL_SIZE = 5          # morphological kernel for cleaning
 ROI_MIN_SIZE = 120            # smallest accepted palm box side
 ROI_TARGET_SIZE = 256         # MediaPipe input size
 MAX_HANDS = 2                 # detect both hands
-SMOOTHING_ALPHA = 0.45        # exponential smoothing factor for box tracking
+SMOOTHING_ALPHA = 0.25        # exponential smoothing factor for box tracking
 ASSOC_IOU_THRESHOLD = 0.30    # IoU threshold to link tracks
 LINE_THICKNESS = 2            # drawing line width
 
@@ -244,26 +244,37 @@ def draw_hand_connections(frame, landmarks):
 # Main live camera
 def main():
     cap = cv2.VideoCapture(0)
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    cap.set(cv2.CAP_PROP_FPS, 30)
+
     if not cap.isOpened():
         print("Camera not working")
         return
 
-    face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
-    tracker = PalmTracker(alpha=SMOOTHING_ALPHA)
+    face_cascade = cv2.CascadeClassifier(
+        cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+    )
+    tracker = PalmTracker(alpha=0.25)
 
     print("=" * 70)
-    print("Hand detection")
+    print("Press 'q' to quit")
     print("=" * 70)
 
     show_debug = True
-    # persistence buffer
-    last_rects = []  
+    last_rects = []
+    main.lm_history = []
+    main.miss_count = 0
+    main.last_valid_landmarks = []
+    main.last_roi = None
+    main.smooth_pts = None
 
-    with mp_hands.Hands(static_image_mode=False,
-                        max_num_hands=MAX_HANDS,
-                        model_complexity=1,
-                        min_detection_confidence=0.6,
-                        min_tracking_confidence=0.5) as mp_detector:
+    with mp_hands.Hands(
+        static_image_mode=False,
+        max_num_hands=MAX_HANDS,
+        model_complexity=1,
+        min_detection_confidence=0.45,
+        min_tracking_confidence=0.65
+    ) as mp_detector:
 
         while True:
             ret, frame = cap.read()
@@ -272,7 +283,13 @@ def main():
             frame = cv2.flip(frame, 1)
             H, W = frame.shape[:2]
 
-            # Palm Detection
+            any_detected = False
+            palm_landmarks = []
+            fullframe_landmarks = []
+            palm_boxes = []
+            mediapipe_boxes = []
+
+            # Palm detection
             rects_raw, mask, faces = detect_palm_regions(frame, face_cascade)
             rects_smooth = tracker.update(rects_raw)
 
@@ -283,7 +300,7 @@ def main():
             else:
                 rects_smooth = []
 
-            # Skin mask
+            # Debug skin mask
             if show_debug:
                 for (x, y, fw, fh) in faces:
                     cv2.rectangle(frame, (x, y), (x + fw, y + fh), (0, 0, 255), 2)
@@ -292,76 +309,140 @@ def main():
                 cv2.putText(frame, "Skin Mask", (15, 25),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
 
-            # Hand Detection
-            any_detected = False
-            if rects_smooth:
-                for rect in rects_smooth:
-                    cx, cy, w, h, ang = rect
-                    roi, Minv, crop_origin, _ = extract_upright_palm_roi(frame, rect)
-                    if roi is None:
-                        continue
+            # Feed palm dection ROI to mediapipe hand landmark
+            for rect in rects_smooth:
+                cx, cy, w, h, angle = rect
+                roi, Minv, crop_origin, _ = extract_upright_palm_roi(frame, rect)
+                if roi is None and main.last_roi is not None:
+                    roi = main.last_roi
+                else:
+                    main.last_roi = roi
+                if roi is None:
+                    continue
 
-                    result = run_mediapipe_hands(mp_detector, roi)
-                    if result.multi_hand_landmarks:
-                        any_detected = True
-                        # Palm dection with mediapipe landmark
-                        axb, poly = rect_to_box_points(*rect)
-                        cv2.polylines(frame, [poly], True, (0, 255, 0), 2)
-                        cv2.circle(frame, (int(cx), int(cy)), 4, (255, 0, 255), -1)
+                # Skip small ROI for accuracy
+                roi_area = w * h
+                aspect_ratio = w / (h + 1e-6)
+                if roi_area < 25000 or 0.6 < aspect_ratio < 1.4:
+                    continue
 
-                        for hand_lms in result.multi_hand_landmarks:
-                            pts = map_landmarks_to_frame(
-                                hand_lms, Minv, crop_origin, (roi.shape[1], roi.shape[0])
-                            )
-                            for p in pts:
-                                cv2.circle(frame, p, 3, (0, 200, 255), -1)
-                            draw_hand_connections(frame, pts)
-                    else:
-                        # Fallback to mediapipe if no palm detected
-                        fallback_result = mp_detector.process(convert_bgr_to_rgb(frame))
-                        if fallback_result.multi_hand_landmarks:
-                            any_detected = True
-                            for hand_lms in fallback_result.multi_hand_landmarks:
-                                # Compute bounding box from landmarks
-                                xs = [lm.x * W for lm in hand_lms.landmark]
-                                ys = [lm.y * H for lm in hand_lms.landmark]
-                                x1, y1 = int(min(xs)), int(min(ys))
-                                x2, y2 = int(max(xs)), int(max(ys))
-                                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                                for p in zip(xs, ys):
-                                    cv2.circle(frame, (int(p[0]), int(p[1])), 2, (0, 200, 255), -1)
-                                draw_hand_connections(frame, [(int(x), int(y)) for x, y in zip(xs, ys)])
+                result = run_mediapipe_hands(mp_detector, roi)
+                if result.multi_hand_landmarks:
+                    any_detected = True
+                    _, poly = rect_to_box_points(*rect)
+                    cv2.polylines(frame, [poly], True, (0, 255, 0), 2)
+                    cv2.circle(frame, (int(cx), int(cy)), 4, (255, 0, 255), -1)
+                    palm_boxes.append(poly)
 
-            # Fallback to mediapipe to feed whole frame to mediapipe
-            if not any_detected:
+                    for hand_lms in result.multi_hand_landmarks:
+                        pts = map_landmarks_to_frame(
+                            hand_lms, Minv, crop_origin, (roi.shape[1], roi.shape[0])
+                        )
+
+                        # Fast smoothing
+                        main.lm_history.append(np.array(pts, dtype=np.float32))
+                        if len(main.lm_history) > 1:
+                            main.lm_history.pop(0)
+                        avg_pts = np.mean(main.lm_history, axis=0).astype(np.float32)
+                        if main.smooth_pts is None:
+                            main.smooth_pts = avg_pts
+                        main.smooth_pts = 0.6 * main.smooth_pts + 0.4 * avg_pts
+                        pts = [tuple(p.astype(int)) for p in main.smooth_pts]
+
+                        palm_landmarks.append(pts)
+                        for p in pts:
+                            cv2.circle(frame, p, 3, (0, 200, 255), -1)
+                        draw_hand_connections(frame, pts)
+
+            # Feed full frame to mediapipe hand landmark if no palm detected
+            if palm_landmarks:
+                main.miss_count = 0
+            else:
+                main.miss_count += 1
+
+            if main.miss_count > 2:
                 fallback_result = mp_detector.process(convert_bgr_to_rgb(frame))
                 if fallback_result.multi_hand_landmarks:
+                    any_detected = True
                     for hand_lms in fallback_result.multi_hand_landmarks:
-                        any_detected = True
                         xs = [lm.x * W for lm in hand_lms.landmark]
                         ys = [lm.y * H for lm in hand_lms.landmark]
+                        pts = [(int(x), int(y)) for x, y in zip(xs, ys)]
+                        fullframe_landmarks.append(pts)
                         x1, y1 = int(min(xs)), int(min(ys))
                         x2, y2 = int(max(xs)), int(max(ys))
-                        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                        mediapipe_boxes.append((x1, y1, x2, y2))
+            # Remove any potential duplicate of palm detection and mediapipe palm detection
+            final_landmarks = []
+            final_boxes = []
+            if palm_landmarks and fullframe_landmarks:
+                for i, full in enumerate(fullframe_landmarks):
+                    fx1, fy1 = np.min(full, axis=0)
+                    fx2, fy2 = np.max(full, axis=0)
+                    f_box = (fx1, fy1, fx2, fy2)
+                    duplicate = False
+                    for palm in palm_landmarks:
+                        px1, py1 = np.min(palm, axis=0)
+                        px2, py2 = np.max(palm, axis=0)
+                        p_box = (px1, py1, px2, py2)
+                        if compute_iou(f_box, p_box) > 0.25:
+                            duplicate = True
+                            break
+                    if not duplicate:
+                        final_landmarks.append(full)
+                        final_boxes.append(mediapipe_boxes[i])
+                final_landmarks.extend(palm_landmarks)
+                final_boxes.extend(palm_boxes)
+            else:
+                final_landmarks = palm_landmarks or fullframe_landmarks
+                final_boxes = palm_boxes or mediapipe_boxes
 
-                        for p in zip(xs, ys):
-                            cv2.circle(frame, (int(p[0]), int(p[1])), 2, (0, 200, 255), -1)
-                        draw_hand_connections(frame, [(int(x), int(y)) for x, y in zip(xs, ys)])
+            # Fade out hand landmark if there is no hand detected
+            if len(final_landmarks) > 0:
+                # Keep 2 frame persistance
+                main.last_valid_landmarks = (final_landmarks, 2)  
+                main.last_seen = cv2.getTickCount()
+            else:
+                # Check how long since last hand was visible
+                now = cv2.getTickCount()
+                elapsed = (now - getattr(main, "last_seen", now)) / cv2.getTickFrequency()
 
-            # Display info
-            #fps = cap.get(cv2.CAP_PROP_FPS)
-            #cv2.putText(frame, f"Hands: {len(rects_smooth)}  FPS: {fps:.1f}",
-            #    (12, H - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                if hasattr(main, "last_valid_landmarks") and main.last_valid_landmarks:
+                    old_lms, ttl = main.last_valid_landmarks
+                    # If just a tiny flicker  then keep for 2 frames
+                    if elapsed < 0.05 and ttl > 0:
+                        final_landmarks = old_lms
+                        main.last_valid_landmarks = (old_lms, ttl - 1)
+                    else:
+                        # Clear immeditaly 
+                        main.last_valid_landmarks = []
+                else:
+                    main.last_valid_landmarks = []
 
-            cv2.imshow("Hand tracking", frame)
 
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord('q'):
+            # Draw rectangle box around hand
+            for pts in final_landmarks:
+                for p in pts:
+                    cv2.circle(frame, p, 3, (0, 255, 200), -1)
+                draw_hand_connections(frame, pts)
+
+            for box in final_boxes:
+                if isinstance(box, np.ndarray):
+                    cv2.polylines(frame, [box], True, (0, 255, 0), 2)
+                else:
+                    x1, y1, x2, y2 = box
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+
+            if not any_detected:
+                main.lm_history.clear()
+                main.smooth_pts = None
+
+            cv2.imshow("Hand Detection", frame)
+            if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
 
     cap.release()
     cv2.destroyAllWindows()
-
 
 # 
 if __name__ == "__main__":
