@@ -4,7 +4,7 @@ test_orientation_tracking.py - Standalone test for hand orientation tracking
 Tests roll and yaw tracking in isolation before integration.
 Press SPACE to start/stop tracking rotation from reference.
 
-MODIFIED: Now detects only ONE axis at a time (whichever has largest change)
+Detects only ONE axis at a time (whichever has largest change)
 """
 
 import mediapipe as mp
@@ -27,7 +27,7 @@ PINKY_MCP = 17
 class HandOrientationTracker:
     """Track hand roll and yaw orientation for drone control"""
     
-    def __init__(self, deadzone_degrees=5.0):
+    def __init__(self, deadzone_degrees=10.0):
         self.deadzone = deadzone_degrees
         
         # Reference orientation
@@ -177,7 +177,7 @@ class HandOrientationTracker:
         self.reference_roll = None
         self.reference_yaw = None
         self.reference_pitch = None
-        print("[REFERENCE CLEARED]")
+        # print("[REFERENCE CLEARED]")
     
     def get_rotation_commands(self, hand_landmarks, timestamp=None):
         """Get rotation commands based on orientation change from reference.
@@ -412,7 +412,6 @@ def main():
             break
         
         frame = cv2.flip(frame, 1)
-        current_time = time.time()
         
         # Detect hands
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -428,7 +427,7 @@ def main():
 
             
             # Get orientation info
-            orientation_info = tracker.get_orientation_info(hand, current_time)
+            orientation_info = tracker.get_orientation_info(hand)
             current_orient = orientation_info['current']
             
             # Draw coordinate axes
@@ -482,7 +481,7 @@ def main():
                            (10, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.5, pitch_color, 2 if dominant == 'pitch' else 1)
                 
                 # Get and display commands
-                commands = tracker.get_rotation_commands(hand, current_time)
+                commands = tracker.get_rotation_commands(hand)
                 
                 if commands:
                     y_pos += 40
@@ -532,7 +531,7 @@ def main():
                 
                 if not tracking_active:
                     # Start tracking - set reference
-                    tracker.set_reference(hand, current_time)
+                    tracker.set_reference(hand)
                     tracking_active = True
                     print("[INFO] Tracking STARTED - Reference set (Single Axis Mode)")
                 else:

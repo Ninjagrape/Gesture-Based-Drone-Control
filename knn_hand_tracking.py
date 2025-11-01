@@ -22,6 +22,8 @@ from sklearn.neighbors import KNeighborsClassifier
 
 # IMPORT DEPTH TRACKING MODULE
 from monocular_depth_tracking import Wrist3DTracker
+
+from orientation_tracking import HandOrientationTracker
 from lp_filt import OneEuroFilter
 
 #LANDMARK GLOBALS--------------------------------------------------------------------------------------
@@ -42,7 +44,7 @@ PIP        = [6, 10, 14, 18]  # middle joints
 THUMB, INDEX, MIDDLE, RING, PINKY = 0, 1, 2, 3, 4
 
 
-#KNN CLASSES------------------------------------------------------------------------------------
+# KNN CLASSES------------------------------------------------------------------------------------
 class KNNGesture:
     def __init__(self, n_neighbors=5):
         self.base_k = n_neighbors  # remember requested k
@@ -253,6 +255,10 @@ h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 # Initialize 3D tracker from imported module
 wrist_tracker = Wrist3DTracker(frame_width=w)
 
+# Initialise orientationn tracker
+orientation_tracker = HandOrientationTracker(deadzone_degrees=10.0)
+
+
 # MediaPipe setup - handle Windows path issues
 model_path = 'hand_landmarker.task'
 if os.path.isabs(model_path):
@@ -431,14 +437,13 @@ while cap.isOpened():
                 pred, conf = knn_dynamic.predict(combined)
 
             # === GESTURE STATE MACHINE ===
-            # We keep a separate hold timer per hand index `hi` so multiple hands work correctly.
             if gesture_type == "static" and pred != "none" and conf >= MIN_STATIC_CONF:
                 # Immediate exit gestures
                 if pred in EXIT_GESTURES:
                     gesture_stage = "idle"
                     stable_label = pred
                     wrist_tracker.clear_reference()
-                    # clear any pending hold for this hand
+                    orientation_tracker.clear_reference()  # ADD THIS LINE
                     gesture_hold_start.pop(hi, None)
 
                 # Mode gestures require confirmation (debounce)
@@ -446,33 +451,39 @@ while cap.isOpened():
                     new_stage = MODE_GESTURES[pred]
                     entry = gesture_hold_start.get(hi)
 
-                    # If different candidate or first time, start or restart timer
                     if entry is None or entry[0] != pred:
                         gesture_hold_start[hi] = (pred, time.time())
-                        stable_label = pred  # immediate UI feedback (not yet confirmed)
+                        stable_label = pred
                     else:
-                        # same candidate, check elapsed time
                         _, t0 = entry
                         elapsed = time.time() - t0
                         if elapsed >= GESTURE_CONFIRM_TIME:
-                            # Confirm the change only once
                             if gesture_stage != new_stage:
                                 gesture_stage = new_stage
                                 stable_label = pred
-                                # Only set reference if we have a valid 3D position
+                                # Set reference for position tracking
                                 if pos_3d is not None:
                                     wrist_tracker.set_reference(pos_3d)
-                            # remove the hold timer so it won't re-trigger
+                                # Set reference for orientation tracking
+                                if new_stage == "rotating":
+                                    orientation_tracker.set_reference(hand)  # ADD THIS
                             gesture_hold_start.pop(hi, None)
             else:
-                # If prediction disappears / low confidence / non-static => reset any pending hold for this hand
                 gesture_hold_start.pop(hi, None)
 
 
             # === USE 3D TRACKING ===
             if gesture_stage in ["changing_speed", "translating", "rotating"]:
+                # Position-based commands (existing)
                 commands = wrist_tracker.get_movement_commands(pos_3d)
                 displacement_info = wrist_tracker.get_displacement_info(pos_3d)
+                
+                # Orientation-based commands (NEW)
+                if gesture_stage == "rotating":
+                    orientation_commands = orientation_tracker.get_rotation_commands(hand)
+                    # Override with orientation commands in rotating mode
+                    if orientation_commands:
+                        commands = orientation_commands
                 
                 # Filter commands by mode
                 for cmd, magnitude in commands:
@@ -481,11 +492,13 @@ while cap.isOpened():
                         show_cmd = True
                     elif gesture_stage == "translating" and cmd in ["MOVE LEFT", "MOVE RIGHT", "MOVE UP", "MOVE DOWN"]:
                         show_cmd = True
-                    elif gesture_stage == "rotating" and cmd in ["YAW LEFT", "YAW RIGHT"]:
-                        show_cmd = True
+                    elif gesture_stage == "rotating" and cmd in ["YAW LEFT", "YAW RIGHT", "ROLL LEFT", "ROLL RIGHT", "PITCH UP", "PITCH DOWN"]:
+                        show_cmd = True  # ADD ORIENTATION COMMANDS HERE
                     
                     if show_cmd:
-                        print(f"[CMD] {cmd} ({magnitude:.1f}cm)")
+                        # Format magnitude based on command type
+                        unit = "deg" if cmd in ["YAW LEFT", "YAW RIGHT", "ROLL LEFT", "ROLL RIGHT", "PITCH UP", "PITCH DOWN"] else "cm"
+                        print(f"[CMD] {cmd} ({magnitude:.1f}{unit})")
                         stable_label = cmd
                 
                 # Display displacement
