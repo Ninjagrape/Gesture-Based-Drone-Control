@@ -2,6 +2,8 @@ import cv2
 import numpy as np
 import mediapipe as mp
 
+from lp_filt import OneEuroFilter
+
 # Configuration
 MIN_CONTOUR_AREA = 3000       # ignore tiny contours
 MAX_CONTOUR_AREA_FR = 0.2    # ignore contours covering >20% of frame
@@ -167,35 +169,82 @@ class PalmTrack:
         self.rect = rect
         self.age = 0
 
+# Filtered palm track with One Euro filter for bounding boxes
+class FilteredPalmTrack:
+    def __init__(self, rect):
+        self.rect = rect
+        self.age = 0
+        
+        # One Euro filters for (cx, cy, w, h, angle)
+        # Position: responsive, Size: very smooth, Angle: smoothest
+        self.filters = [
+            OneEuroFilter(min_cutoff=1.5, beta=0.015, d_cutoff=1.0),  # cx - responsive
+            OneEuroFilter(min_cutoff=1.5, beta=0.015, d_cutoff=1.0),  # cy - responsive
+            OneEuroFilter(min_cutoff=0.1, beta=0.001, d_cutoff=1.0),  # w - very slow changes
+            OneEuroFilter(min_cutoff=0.1, beta=0.001, d_cutoff=1.0),  # h - very slow changes
+            OneEuroFilter(min_cutoff=0.15, beta=0.002, d_cutoff=1.0), # angle - smooth
+        ]
+        
+        # Initialize filters
+        for i, val in enumerate(rect):
+            self.filters[i].update(np.array([val]))
+    
+    def update_rect(self, new_rect):
+        filtered = []
+        for i, (filt, val) in enumerate(zip(self.filters, new_rect)):
+            if i == 4:  # angle - handle wrapping
+                old_angle = self.rect[4]
+                new_angle = val
+                # Unwrap to prevent jumps
+                while new_angle - old_angle > 180:
+                    new_angle -= 360
+                while new_angle - old_angle < -180:
+                    new_angle += 360
+                filtered_val = filt.update(np.array([new_angle]))[0]
+                filtered_val = ((filtered_val + 180) % 360) - 180
+            else:
+                filtered_val = filt.update(np.array([val]))[0]
+            filtered.append(filtered_val)
+        
+        self.rect = tuple(filtered)
+        return self.rect
+        
 # Track up to two hands 
 class PalmTracker:
     def __init__(self, alpha=SMOOTHING_ALPHA, iou_thresh=ASSOC_IOU_THRESHOLD, max_tracks=MAX_HANDS):
         self.alpha, self.iou_thresh, self.max_tracks = alpha, iou_thresh, max_tracks
         self.tracks = []
-    # Associate ti existing dection with smoothing
+    
     def update(self, rects):
         det_boxes = [rect_to_axb(r) for r in rects]
         used = set()
+        
         # Update existing tracks
         for t in self.tracks:
             best_idx, best_iou = -1, 0
             for i, box in enumerate(det_boxes):
-                if i in used: continue
+                if i in used: 
+                    continue
                 score = compute_iou(rect_to_axb(t.rect), box)
                 if score > best_iou:
                     best_iou, best_idx = score, i
+            
             if best_idx >= 0 and best_iou >= self.iou_thresh:
-                t.rect = smooth_rectangles(t.rect, rects[best_idx], self.alpha)
+                # Update with filtered smoothing
+                t.update_rect(rects[best_idx])
                 used.add(best_idx)
                 t.age = min(t.age + 1, 10)
             else:
                 t.age -= 1
-        # Create new tracks
+        
+        # Create new tracks with filters
         for i, r in enumerate(rects):
             if i not in used and len(self.tracks) < self.max_tracks:
-                self.tracks.append(PalmTrack(r))
+                self.tracks.append(FilteredPalmTrack(r))
+        
         # Remove stale tracks
         self.tracks = [t for t in self.tracks if t.age > -3]
+        
         return [t.rect for t in self.tracks]
 
 # Dection function
@@ -231,6 +280,7 @@ mp_hands = mp.solutions.hands
 def run_mediapipe_hands(hands_detector, roi_bgr):
     roi_rgb = convert_bgr_to_rgb(cv2.resize(roi_bgr, (ROI_TARGET_SIZE, ROI_TARGET_SIZE)))
     return hands_detector.process(roi_rgb)
+
 # Draw 21 handland marks
 def draw_hand_connections(frame, landmarks):
     PALM_CONN = [(0,1),(0,5),(5,9),(9,13),(13,17),(0,17)]
@@ -240,6 +290,29 @@ def draw_hand_connections(frame, landmarks):
     for a, b in PALM_CONN + FINGER_CONN:
         if a < len(landmarks) and b < len(landmarks):
             cv2.line(frame, landmarks[a], landmarks[b], (40, 220, 255), LINE_THICKNESS)
+
+def create_landmark_filters(num_landmarks=21, per_hand=2):
+    """
+    Create One Euro filters for all landmarks
+    
+    Args:
+        num_landmarks: 21 landmarks per hand
+        per_hand: Number of hands to track (2)
+    
+    Returns:
+        Dictionary mapping hand_id -> list of filters
+    """
+    filters = {}
+    for hand_id in range(per_hand):
+        filters[hand_id] = [
+            OneEuroFilter(
+                min_cutoff=1.0,      # Base smoothing
+                beta=0.007,          # Responsiveness (lower = smoother, higher = more responsive)
+                d_cutoff=1.0         # Derivative smoothing
+            ) 
+            for _ in range(num_landmarks)
+        ]
+    return filters
 
 # Main live camera
 def main():
@@ -255,6 +328,9 @@ def main():
         cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
     )
     tracker = PalmTracker(alpha=0.25)
+    
+    # Initialize landmark filters
+    landmark_filters = create_landmark_filters(num_landmarks=21, per_hand=2)
 
     print("=" * 70)
     print("Press 'q' to quit")
@@ -282,7 +358,7 @@ def main():
                 break
             frame = cv2.flip(frame, 1)
             H, W = frame.shape[:2]
-
+            
             any_detected = False
             palm_landmarks = []
             fullframe_landmarks = []
@@ -309,7 +385,8 @@ def main():
                 cv2.putText(frame, "Skin Mask", (15, 25),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
 
-            # Feed palm dection ROI to mediapipe hand landmark
+            # Feed palm detection ROI to mediapipe hand landmark
+            hand_idx = 0
             for rect in rects_smooth:
                 cx, cy, w, h, angle = rect
                 roi, Minv, crop_origin, _ = extract_upright_palm_roi(frame, rect)
@@ -335,24 +412,27 @@ def main():
                     palm_boxes.append(poly)
 
                     for hand_lms in result.multi_hand_landmarks:
-                        pts = map_landmarks_to_frame(
+                        # Get raw landmarks
+                        pts_raw = map_landmarks_to_frame(
                             hand_lms, Minv, crop_origin, (roi.shape[1], roi.shape[0])
                         )
-
-                        # Fast smoothing
-                        main.lm_history.append(np.array(pts, dtype=np.float32))
-                        if len(main.lm_history) > 1:
-                            main.lm_history.pop(0)
-                        avg_pts = np.mean(main.lm_history, axis=0).astype(np.float32)
-                        if main.smooth_pts is None:
-                            main.smooth_pts = avg_pts
-                        main.smooth_pts = 0.6 * main.smooth_pts + 0.4 * avg_pts
-                        pts = [tuple(p.astype(int)) for p in main.smooth_pts]
-
+                        
+                        # Apply One Euro filter to each landmark
+                        pts_filtered = []
+                        for lm_idx, (x, y) in enumerate(pts_raw):
+                            filtered_pos = landmark_filters[hand_idx][lm_idx].update(
+                                np.array([x, y], dtype=float), 
+                            )
+                            pts_filtered.append(tuple(filtered_pos.astype(int)))
+                        
+                        pts = pts_filtered
                         palm_landmarks.append(pts)
+                        
                         for p in pts:
                             cv2.circle(frame, p, 3, (0, 200, 255), -1)
                         draw_hand_connections(frame, pts)
+                
+                hand_idx += 1
 
             # Feed full frame to mediapipe hand landmark if no palm detected
             if palm_landmarks:
@@ -364,14 +444,27 @@ def main():
                 fallback_result = mp_detector.process(convert_bgr_to_rgb(frame))
                 if fallback_result.multi_hand_landmarks:
                     any_detected = True
+                    hand_idx = 0
                     for hand_lms in fallback_result.multi_hand_landmarks:
                         xs = [lm.x * W for lm in hand_lms.landmark]
                         ys = [lm.y * H for lm in hand_lms.landmark]
-                        pts = [(int(x), int(y)) for x, y in zip(xs, ys)]
-                        fullframe_landmarks.append(pts)
-                        x1, y1 = int(min(xs)), int(min(ys))
-                        x2, y2 = int(max(xs)), int(max(ys))
+                        
+                        # Apply One Euro filter
+                        pts_filtered = []
+                        for lm_idx, (x, y) in enumerate(zip(xs, ys)):
+                            filtered_pos = landmark_filters[hand_idx][lm_idx].update(
+                                np.array([x, y], dtype=float),
+                            )
+                            pts_filtered.append(tuple(filtered_pos.astype(int)))
+                        
+                        fullframe_landmarks.append(pts_filtered)
+                        x1 = int(min([p[0] for p in pts_filtered]))
+                        y1 = int(min([p[1] for p in pts_filtered]))
+                        x2 = int(max([p[0] for p in pts_filtered]))
+                        y2 = int(max([p[1] for p in pts_filtered]))
                         mediapipe_boxes.append((x1, y1, x2, y2))
+                        hand_idx += 1
+                        
             # Remove any potential duplicate of palm detection and mediapipe palm detection
             final_landmarks = []
             final_boxes = []
@@ -399,26 +492,21 @@ def main():
 
             # Fade out hand landmark if there is no hand detected
             if len(final_landmarks) > 0:
-                # Keep 2 frame persistance
-                main.last_valid_landmarks = (final_landmarks, 2)  
+                main.last_valid_landmarks = (final_landmarks, 2)
                 main.last_seen = cv2.getTickCount()
             else:
-                # Check how long since last hand was visible
                 now = cv2.getTickCount()
                 elapsed = (now - getattr(main, "last_seen", now)) / cv2.getTickFrequency()
 
                 if hasattr(main, "last_valid_landmarks") and main.last_valid_landmarks:
                     old_lms, ttl = main.last_valid_landmarks
-                    # If just a tiny flicker  then keep for 2 frames
                     if elapsed < 0.05 and ttl > 0:
                         final_landmarks = old_lms
                         main.last_valid_landmarks = (old_lms, ttl - 1)
                     else:
-                        # Clear immeditaly 
                         main.last_valid_landmarks = []
                 else:
                     main.last_valid_landmarks = []
-
 
             # Draw rectangle box around hand
             for pts in final_landmarks:
@@ -433,9 +521,14 @@ def main():
                     x1, y1, x2, y2 = box
                     cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
+            # Reset filters when hand is lost for too long
             if not any_detected:
                 main.lm_history.clear()
                 main.smooth_pts = None
+                if main.miss_count > 10:
+                    for hand_id in landmark_filters:
+                        for filt in landmark_filters[hand_id]:
+                            filt.reset()
 
             cv2.imshow("Hand Detection", frame)
             if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -443,7 +536,6 @@ def main():
 
     cap.release()
     cv2.destroyAllWindows()
-
 # 
 if __name__ == "__main__":
     main()
