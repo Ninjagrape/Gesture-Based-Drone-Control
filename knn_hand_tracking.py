@@ -17,6 +17,10 @@ import os
 import math
 import time
 
+import csv
+from pathlib import Path
+from datetime import datetime
+
 from sklearn.preprocessing import StandardScaler
 from sklearn.neighbors import KNeighborsClassifier
 
@@ -46,6 +50,33 @@ PIP        = [6, 10, 14, 18]  # middle joints
 # named indices
 THUMB, INDEX, MIDDLE, RING, PINKY = 0, 1, 2, 3, 4
 
+#FOR COLLECTING DATA 
+# dataset config
+DATA_CSV = Path("dataset.csv")
+SUBJECT_ID = "s01"      # change per person
+SESSION_ID = "a"        # change per capture session
+
+# create header once
+if not DATA_CSV.exists():
+    with DATA_CSV.open("w", newline="") as f:
+        w = csv.writer(f)
+        # 74 base features: f0..f73; optional 3 motion features: v0..v2
+        w.writerow(["label","gesture_type","subject_id","session_id", *[f"f{i}" for i in range(74)], "v0","v1","v2"])
+
+#-----------------------------------------------------------------------------------------------------
+#CHOOSE MODE: SIM OR TRAIN
+def _choose_mode():
+    while True:
+        m = input("Choose mode: train [t] or sim [s]: ").strip().lower()
+        if m in ("t", "train"): return "train"
+        if m in ("s", "sim"):   return "sim"
+        print("please type 't' or 's'.")
+
+MODE = _choose_mode()
+IS_TRAIN = (MODE == "train")
+IS_SIM   = (MODE == "sim")
+ALLOW_RECORDING = IS_TRAIN
+print(f"[INFO] starting in {MODE} mode")
 
 # KNN CLASSES------------------------------------------------------------------------------------
 class KNNGesture:
@@ -250,7 +281,27 @@ def kn_ready(kn):
 
 #MAIN SETUP----------------------------------------------------------------------------------------------------
 
-cap = cv2.VideoCapture(0)
+
+
+print("\n" + "="*60)
+print("3D GESTURE CONTROL SYSTEM (MODULAR)")
+print("="*60)
+print("\nCONTROLS:")
+print("  1-5: Select gesture for training")
+print("  Keys for recording labels: 1: STOP, 2: HOLD, 3: CHANGE SPEED, \
+    4: TRANSLATE, 5: ROTATE")
+print("  R: Record 100 samples (train mode)")
+print("  R: Reset drone (sim mode)")
+print("  F: Reset 3D filter")
+print("  Q: Quit and save")
+print("\nMODES:")
+print("  STOP/HOLD     → Exit mode")
+print("  CHANGE SPEED  → 3D depth control")
+print("  TRANSLATE     → 3D translation")
+print("  ROTATE        → 3D yaw control")
+print("="*60 + "\n")
+
+cap = cv2.VideoCapture(1)
 fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
 w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
 h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -262,9 +313,10 @@ wrist_tracker = Wrist3DTracker(frame_width=w)
 orientation_tracker = HandOrientationTracker(deadzone_degrees=10.0)
 
 # Initialize drone simulator
-drone_sim = DroneSimulator(window_size=(800, 600))
-print("[INFO] Drone simulator initialized")
-
+drone_sim = None
+if IS_SIM:
+    drone_sim = DroneSimulator(window_size=(800, 600))
+    print("[INFO] Drone simulator initialized")
 
 # MediaPipe setup - handle Windows path issues
 model_path = 'hand_landmarker.task'
@@ -321,20 +373,9 @@ gesture_hold_start = {}           # map: hand_index -> (candidate_label, start_t
 GESTURE_CONFIRM_TIME = 0.25        # seconds to confirm a mode gesture
 
 
-print("\n" + "="*60)
-print("3D GESTURE CONTROL SYSTEM (MODULAR)")
-print("="*60)
-print("\nCONTROLS:")
-print("  1-5: Select gesture for training")
-print("  R: Record 100 samples")
-print("  F: Reset 3D filter")
-print("  Q: Quit and save")
-print("\nMODES:")
-print("  STOP/HOLD     → Exit mode")
-print("  CHANGE SPEED  → 3D depth control")
-print("  TRANSLATE     → 3D translation")
-print("  ROTATE        → 3D yaw control")
-print("="*60 + "\n")
+# allow recording only in train mode
+ALLOW_RECORDING = IS_TRAIN
+print(f"[INFO] starting in {MODE} mode")
 
 # Before the main loop, open a file for writing
 output_file = open('filter_testing_data/thumb_tracking.txt', 'w')
@@ -405,11 +446,20 @@ while cap.isOpened():
             # === RECORDING MODE ===
             if recording and samples_left > 0:
                 if gesture_type == "static":
+                    row = [current_label, "static", SUBJECT_ID, SESSION_ID, *feats.tolist(), 0.0, 0.0, 0.0] #used for making dataset
                     knn_static.add_sample(feats, current_label)
                 else:
                     motion_feats = v if v is not None else np.zeros(3)
                     combined = np.concatenate([feats, motion_feats])
+                    row = [current_label, "dynamic", SUBJECT_ID, SESSION_ID, *feats.tolist(), *motion_feats.tolist()]
                     knn_dynamic.add_sample(combined, current_label)
+                    
+                
+                # append to csv
+                with DATA_CSV.open("a", newline="") as f:
+                    csv.writer(f).writerow(row)
+                    print(f"[INFO] Wrote data for {current_label} to csv.")
+
 
                 samples_left -= 1
                 cv2.putText(annotated_frame, f"Recording {current_label}: {N_SAMPLES - samples_left}/{N_SAMPLES}",
@@ -508,7 +558,8 @@ while cap.isOpened():
                         print(f"[CMD] {cmd} ({magnitude:.1f}{unit})")
                         
                         # Send to simulator
-                        drone_sim.process_command(cmd, magnitude)
+                        if IS_SIM:
+                            drone_sim.process_command(cmd, magnitude)
 
                         stable_label = cmd
 
@@ -547,20 +598,32 @@ while cap.isOpened():
     cv2.imshow('3D Gesture Control', output_frame)
 
     # Render drone simulator
-    if not drone_sim.render():
-        print("[INFO] Simulator window closed")
-        break
+    if IS_SIM:
+        if not drone_sim.render():
+            print("[INFO] Simulator window closed")
+            break
 
     # Keyboard
     k = cv2.waitKey(1) & 0xFF
-    
+
+
+    # 'r' only works in train mode
+    if k == ord('r'):
+        if ALLOW_RECORDING:
+            recording = True
+            samples_left = N_SAMPLES
+            print(f"[INFO] Recording {N_SAMPLES} samples for '{current_label}'")
+        else:
+            print("[INFO] recording is disabled in sim mode")
+
     if k == ord('q'):
-        # if knn_static.is_trained:
-        #     knn_static.save("gesture_static.pkl")
-        #     print("[INFO] static gesture saved")
-        # if knn_dynamic.is_trained:
-        #     knn_dynamic.save("gesture_dynamic.pkl")
-        #     print("[INFO] dynamic gesture saved")
+        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+        if knn_static.is_trained:
+            knn_static.save(f"gesture_static_{ts}.pkl")
+            print("[INFO] static gesture saved")
+        if knn_dynamic.is_trained:
+            knn_dynamic.save(f"gesture_dynamic_{ts}.pkl")
+            print("[INFO] dynamic gesture saved")
 
         print("[INFO] Quitting...")
         break
