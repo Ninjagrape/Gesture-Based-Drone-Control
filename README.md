@@ -12,6 +12,7 @@ This project implements a contactless drone control interface using computer vis
 
 ### Key Features
 
+- **Custom two stage landmarker model**: A custom first stage ROI detector using traditional segmentation models. Lighterweight.
 - **3D Hand Tracking**: Monocular depth estimation from single camera using hand geometry
 - **Gesture Recognition**: KNN-based classifier for static and dynamic gesture recognition
 - **Orientation Tracking**: Full 6-DOF hand orientation (roll, pitch, yaw) for rotation control
@@ -30,6 +31,7 @@ This project implements a contactless drone control interface using computer vis
            ▼
 ┌─────────────────────────────────────┐
 │     MediaPipe Hand Landmarker       │
+|        or custom two stage          |
 │   (21 keypoints per hand, 2 hands)  │
 └──────────┬──────────────────────────┘
            │
@@ -37,32 +39,32 @@ This project implements a contactless drone control interface using computer vis
            ▼                          ▼
 ┌──────────────────────┐   ┌──────────────────────┐
 │  Gesture Recognition │   │  3D Position Tracker │
-│  (KNN Classifier)    │   │  (Depth Estimation)  │
+│  (KNN Classifier)    ├──►│  (Depth Estimation)  │
 │  • Static gestures   │   │  • Multi-bone method │
 │  • Dynamic gestures  │   │  • One Euro Filter   │
 └──────────┬───────────┘   └──────────┬───────────┘
            │                          │
-           ├──────────────────────────┤
+           ├──────────────────────────└─────────────┐
+           ▼                                        │
+┌──────────────────────────────────────────────┐    │
+│       Hand Orientation Tracker               │    │
+│  (Roll, Pitch, Yaw from Rotation Matrix)     │    │
+└──────────┬───────────────────────────────────┘    │
+           │                          ┌─────────────┘
            ▼                          ▼
 ┌──────────────────────────────────────────────┐
-│       Hand Orientation Tracker               │
-│  (Roll, Pitch, Yaw from Rotation Matrix)    │
-└──────────┬───────────────────────────────────┘
-           │
-           ▼
-┌──────────────────────────────────────────────┐
 │         Control State Machine                │
-│  • Idle → Translating → Idle                │
-│  • Idle → Rotating → Idle                   │
-│  • Idle → Speed Control → Idle              │
+│  • Idle → Translating → Idle                 │
+│  • Idle → Rotating → Idle                    │
+│  • Idle → Speed Control → Idle               │
 └──────────┬───────────────────────────────────┘
            │
            ▼
 ┌──────────────────────────────────────────────┐
 │           3D Drone Simulator                 │
-│  • 6-DOF motion simulation                  │
-│  • Real-time visualization                  │
-│  • Trail rendering                          │
+│  • 6-DOF motion simulation                   │
+│  • Real-time visualization                   │
+│  • Trail rendering                           │
 └──────────────────────────────────────────────┘
 ```
 
@@ -136,6 +138,7 @@ The system operates in different control modes:
 - **R**: Record gesture samples (for training)
 - **F**: Reset position filter
 - **S**: Set reference position (for debugging)
+- **T**: Toggle between Mediapipe integrated two stage and custom two stage model
 - **1-5**: Select gesture label for recording
 
 ### Drone Simulator Controls
@@ -146,6 +149,24 @@ The system operates in different control modes:
 - **Q**: Close simulator
 
 ## Technical Details
+
+### Two-Stage Segmentation Model
+
+The system uses a hybrid detection approach combining classical computer vision with MediaPipe:
+
+**Stage 1 - Palm Region Detection**:
+- **Skin Segmentation**: Dual HSV + YCrCb color space filtering with adaptive thresholding
+- **Face Exclusion**: Haar Cascade classifier removes false positives from facial regions
+- **Contour Analysis**: Detects palm via vertical projection drop-off at wrist boundary
+- **Rotated Bounding Box**: Fits minimal area rectangle to palm contour, normalized to upright orientation
+
+**Stage 2 - MediaPipe Landmark Refinement**:
+- Extracts ROI from Stage 1 (256×256px upright crop)
+- Runs MediaPipe Hands on isolated palm region
+- Maps landmarks back to original frame via inverse affine transformation
+- Fallback to full-frame detection if palm segmentation fails
+
+**Tracking**: IoU-based multi-hand tracker with One Euro filtering on bounding boxes (position: β=0.015, size: β=0.001)
 
 ### Monocular Depth Estimation
 
@@ -217,6 +238,7 @@ gesture-drone-control/
 ├── knn_hand_tracking.py           # Main control system
 ├── monocular_depth_tracking.py    # 3D position estimation
 ├── orientation_tracking.py        # Hand orientation tracking
+├── two_stage_detection.py         # Custom two stage model
 ├── lp_filt.py                     # Low-pass filter implementations
 ├── drone_simulator.py             # 3D visualization
 ├── hand_landmarker.task           # MediaPipe model (download separately)

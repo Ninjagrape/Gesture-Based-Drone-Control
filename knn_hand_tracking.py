@@ -28,6 +28,15 @@ from lp_filt import OneEuroFilter
 
 from drone_simulator import DroneSimulator
 
+from two_stage_detection import (
+    detect_palm_regions,
+    run_mediapipe_hands,
+    map_landmarks_to_frame,
+    extract_upright_palm_roi,
+    PalmTracker,
+    create_landmark_filters as create_2stage_filters
+)
+
 
 #LANDMARK GLOBALS--------------------------------------------------------------------------------------
 WRIST = 0
@@ -177,6 +186,10 @@ def draw_gesture_label(image, hand_or_box, gesture, *, pad=12):
 
 #HELPER FUNCTIONS-------------------------------------------------------------------------------------------
 def palm_facing_camera(result):
+    # Check if handedness data exists (two-stage model doesn't provide it)
+    if not hasattr(result, 'handedness') or not result.handedness:
+        return True  # Assume palm is facing camera if we can't determine
+    
     hand = result.handedness[0][0].category_name
     lm = result.hand_landmarks[0]
 
@@ -261,10 +274,17 @@ wrist_tracker = Wrist3DTracker(frame_width=w)
 # Initialise orientationn tracker
 orientation_tracker = HandOrientationTracker(deadzone_degrees=10.0)
 
+USE_TWO_STAGE = False  # Press 'T' to toggle
+
+# Two-stage model setup
+face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+palm_tracker = PalmTracker()
+two_stage_filters = create_2stage_filters(21, 2)
+mp_detector = None
+
 # Initialize drone simulator
 drone_sim = DroneSimulator(window_size=(800, 600))
 print("[INFO] Drone simulator initialized")
-
 
 # MediaPipe setup - handle Windows path issues
 model_path = 'hand_landmarker.task'
@@ -346,11 +366,118 @@ while cap.isOpened():
     ret, frame = cap.read()
     if not ret:
         break
+
     frame = cv2.flip(frame, 1)
 
+    # Show active model
+    model_text = "TWO-STAGE" if USE_TWO_STAGE else "SINGLE-STAGE"
+    cv2.putText(frame, f"Model: {model_text}", (10, 30), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+
+    # Lazy initialization of two-stage detector
+    if USE_TWO_STAGE and mp_detector is None:
+        mp_hands = mp.solutions.hands
+        mp_detector = mp_hands.Hands(
+            static_image_mode=False,
+            max_num_hands=2,
+            model_complexity=1,
+            min_detection_confidence=0.45,
+            min_tracking_confidence=0.65
+        )
+        print("[INFO] Two-stage detector initialized")
+    
+    # Clean up single-stage when switching to two-stage
+    if USE_TWO_STAGE and detector is not None:
+        detector.close()
+        detector = None
+        print("[INFO] Single-stage detector closed")
+    
+    # Clean up two-stage when switching back
+    if not USE_TWO_STAGE and mp_detector is not None:
+        mp_detector.close()
+        mp_detector = None
+        # Reinitialize single-stage
+        base_options = python.BaseOptions(model_asset_path='hand_landmarker.task')
+        options = vision.HandLandmarkerOptions(base_options=base_options, num_hands=2)
+        detector = vision.HandLandmarker.create_from_options(options)
+        print("[INFO] Single-stage detector reinitialized")
+
+    # NOW RUN DETECTION WITH ACTIVE MODEL
+    if not USE_TWO_STAGE:
+        # SINGLE-STAGE
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
+        detection_result = detector.detect(mp_image)
+        
+        # Apply filters
+        if detection_result.hand_world_landmarks:
+            timestamp = time.time()
+            for hand_landmarks in detection_result.hand_world_landmarks:
+                for i, landmark in enumerate(hand_landmarks):
+                    pos = np.array([landmark.x, landmark.y, landmark.z])
+                    filtered_pos = filters[i].update(pos, timestamp)
+                    landmark.x, landmark.y, landmark.z = filtered_pos
+    
+    else:
+        # TWO-STAGE MODEL
+        timestamp = time.time()
+        rects_raw, mask, faces = detect_palm_regions(frame, face_cascade)
+        rects_smooth = palm_tracker.update(rects_raw)
+        
+        # Create mock result for compatibility
+        class MockResult:
+            hand_landmarks = []
+            hand_world_landmarks = []
+            handedness = []
+        
+        detection_result = MockResult()
+        hand_idx = 0
+        
+        for rect in rects_smooth:
+            cx, cy, w_r, h_r, angle = rect
+            roi, Minv, crop_origin, _ = extract_upright_palm_roi(frame, rect)
+            
+            if roi is None or (w_r * h_r < 25000):
+                continue
+            
+            result = run_mediapipe_hands(mp_detector, roi)
+            
+            if result.multi_hand_landmarks:
+                for hand_lms in result.multi_hand_landmarks:
+                    pts_raw = map_landmarks_to_frame(
+                        hand_lms, Minv, crop_origin, (roi.shape[1], roi.shape[0])
+                    )
+                    
+                    # Filter
+                    pts_filtered = []
+                    for lm_idx, (x, y) in enumerate(pts_raw):
+                        filt_pos = two_stage_filters[hand_idx][lm_idx].update(
+                            np.array([x, y], dtype=float), timestamp
+                        )
+                        pts_filtered.append(filt_pos)
+                    
+                    # Convert to normalized (0-1) and create mock landmarks
+                    class MockLandmark:
+                        def __init__(self, x, y):
+                            self.x = x / w
+                            self.y = y / h
+                            self.z = 0.0
+                    
+                    mock_hand = [MockLandmark(x, y) for x, y in pts_filtered]
+                    detection_result.hand_landmarks.append(mock_hand)
+                    detection_result.hand_world_landmarks.append(mock_hand)  # Add this for compatibility
+                    hand_idx += 1
+    
+    # Show which model is active
     rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
-    detection_result = detector.detect(mp_image)
+    annotated_frame = draw_landmarks_on_image(rgb_frame, detection_result)
+    model_text = "TWO-STAGE" if USE_TWO_STAGE else "SINGLE-STAGE"
+    cv2.putText(annotated_frame, f"Model: {model_text}", (10, 30), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+
+    # rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    # mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
+    # detection_result = detector.detect(mp_image)
 
     # Save landmark position to txt file for filter tuning
     if detection_result.hand_world_landmarks:
@@ -569,18 +696,27 @@ while cap.isOpened():
         current_label = STATIC_GESTURE_KEYS[k]
         print(f"[INFO] Label → {current_label}")
     
-    if k == ord('r'):
-        recording = True
-        samples_left = N_SAMPLES
-        print(f"[INFO] Recording {N_SAMPLES} samples for '{current_label}'")
+    # if k == ord('r'):
+    #     recording = True
+    #     samples_left = N_SAMPLES
+    #     print(f"[INFO] Recording {N_SAMPLES} samples for '{current_label}'")
     
     if k == ord('f'):
         wrist_tracker.reset_filter()
         print("[INFO] Filter reset")
 
+    if k == ord('t'):
+        USE_TWO_STAGE = not USE_TWO_STAGE
+        print(f"[INFO] Model: {'Two-Stage' if USE_TWO_STAGE else 'Single-Stage'}")
+
 # writer.release()
+# CLEANUP AT END
 cap.release()
 cv2.destroyAllWindows()
-detector = None
+
+if detector is not None:
+    detector.close()
+if mp_detector is not None:
+    mp_detector.close()
 
 output_file.close()
