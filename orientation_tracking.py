@@ -1,7 +1,6 @@
 """
-test_orientation_tracking.py - Standalone test for hand orientation tracking
-
-Tests roll and yaw tracking in isolation before integration.
+orientation_tracking.py - Hand Orientation Tracking in rotational axes
+Tests roll and yaw tracking in isolation if run from here
 Press SPACE to start/stop tracking rotation from reference.
 
 Detects only ONE axis at a time (whichever has largest change)
@@ -267,7 +266,7 @@ class HandOrientationTracker:
         self.yaw_filter.reset()
         self.pitch_filter.reset()
 
-def log_keypoints_to_file(hand_landmarks, base_filename="hand_keypoints"):
+def log_keypoints_to_file(hand_landmarks, base_filename="filter_testing_data/hand_keypoints"):
     """Log wrist, thumb CMC, and pinky MCP to three separate .txt files in 3-column format."""
     if hasattr(hand_landmarks[0], 'x'):
         pts = np.array([[lm.x, lm.y, getattr(lm, 'z', 0.0)] for lm in hand_landmarks])

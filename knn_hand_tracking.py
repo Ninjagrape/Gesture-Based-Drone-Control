@@ -337,7 +337,7 @@ print("  ROTATE        → 3D yaw control")
 print("="*60 + "\n")
 
 # Before the main loop, open a file for writing
-output_file = open('thumb_tracking.txt', 'w')
+output_file = open('filter_testing_data/thumb_tracking.txt', 'w')
 output_file.write("# Thumb Tracking Data\n")
 output_file.write("# thumb_tip_x, thumb_tip_y, thumb_tip_z\n")
 

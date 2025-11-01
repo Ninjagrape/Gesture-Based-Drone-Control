@@ -9,6 +9,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 import re
 
+import sys, os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from lp_filt import VelocityBasedLowPassFilter, OneEuroFilter, SimpleEMA
 
 def test_filters_rot(filename, keypoint='Wrist'):
@@ -203,7 +206,7 @@ def plot_results(results):
 if __name__ == '__main__':
     # Load data from file
 
-    results = test_filters('thumb_tracking.txt')
-    # results = test_filters('hand_keypoints_pinky.txt')
+    results = test_filters('filter_testing_data/thumb_tracking.txt')
+    # results = test_filters('filter_testing_data/hand_keypoints_pinky.txt')
 
     plot_results(results)
