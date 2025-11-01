@@ -555,12 +555,12 @@ while cap.isOpened():
     k = cv2.waitKey(1) & 0xFF
     
     if k == ord('q'):
-        if knn_static.is_trained:
-            knn_static.save("gesture_static.pkl")
-            print("[INFO] static gesture saved")
-        if knn_dynamic.is_trained:
-            knn_dynamic.save("gesture_dynamic.pkl")
-            print("[INFO] dynamic gesture saved")
+        # if knn_static.is_trained:
+        #     knn_static.save("gesture_static.pkl")
+        #     print("[INFO] static gesture saved")
+        # if knn_dynamic.is_trained:
+        #     knn_dynamic.save("gesture_dynamic.pkl")
+        #     print("[INFO] dynamic gesture saved")
 
         print("[INFO] Quitting...")
         break
