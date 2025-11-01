@@ -32,7 +32,7 @@ class DroneSimulator:
         self.velocity = 2.0  # cm per command
         
         # Trail history
-        self.trail = deque(maxlen=100)
+        self.trail = deque(maxlen=25)
         self.trail.append(self.position.copy())
         
         # Camera view parameters
@@ -59,17 +59,17 @@ class DroneSimulator:
         
         # Rotation commands (update orientation first)
         if command == "YAW LEFT":
-            self.orientation[2] += magnitude
+            self.orientation[2] += 0.25*magnitude
         elif command == "YAW RIGHT":
-            self.orientation[2] -= magnitude
+            self.orientation[2] -= 0.25*magnitude
         elif command == "PITCH UP":
-            self.orientation[1] += magnitude
+            self.orientation[1] -= 0.25*magnitude
         elif command == "PITCH DOWN":
-            self.orientation[1] -= magnitude
+            self.orientation[1] += 0.25*magnitude
         elif command == "ROLL LEFT":
-            self.orientation[0] -= magnitude
+            self.orientation[0] -= 0.25*magnitude
         elif command == "ROLL RIGHT":
-            self.orientation[0] += magnitude
+            self.orientation[0] += 0.25*magnitude
         
         # Keep orientation in reasonable range
         self.orientation = np.mod(self.orientation + 180, 360) - 180
@@ -242,15 +242,22 @@ class DroneSimulator:
         
         center = self._project_3d_to_2d(self.position)
         
-        # Draw arms and motors
-        for rotated_arm in rotated_arms:
+         # Draw arms and motors with different colors for depth visualization
+        arm_colors = [
+            (100, 255, 100),  # right-front: bright green
+            (255, 100, 100),  # left-front: bright red
+            (100, 100, 255),  # left-back: bright blue
+            (255, 255, 100),  # right-back: bright cyan/yellow
+        ]
+        
+        for i, rotated_arm in enumerate(rotated_arms):
             end_pos = self.position + rotated_arm
             end_screen = self._project_3d_to_2d(end_pos)
             
             # Arm
             cv2.line(img, center, end_screen, (200, 200, 200), 3)
-            # Motor
-            cv2.circle(img, end_screen, 6, (100, 100, 255), -1)
+            # Motor with unique color
+            cv2.circle(img, end_screen, 6, arm_colors[i], -1)
             cv2.circle(img, end_screen, 6, (255, 255, 255), 1)
         
         # Center body
