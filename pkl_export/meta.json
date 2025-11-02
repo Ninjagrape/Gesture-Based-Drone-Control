@@ -1,0 +1,17 @@
+{
+  "feature_dim_reported": 77,
+  "feature_dim_detected": 77,
+  "classes": [
+    "CHANGE SPEED",
+    "GO",
+    "HOLD",
+    "ROTATE",
+    "STOP",
+    "TRANSLATE"
+  ],
+  "n_samples": 293,
+  "n_neighbors": 5,
+  "metric": "minkowski",
+  "scaler_with_mean": true,
+  "scaler_with_std": true
+}
