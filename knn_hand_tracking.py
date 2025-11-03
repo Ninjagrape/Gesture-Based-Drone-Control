@@ -433,6 +433,9 @@ while cap.isOpened():
         hand_idx = 0
         
         for rect in rects_smooth:
+            # ONly take first hand
+            if hand_idx >= 1:  # ADD THIS CHECK
+                break
             cx, cy, w_r, h_r, angle = rect
             roi, Minv, crop_origin, _ = extract_upright_palm_roi(frame, rect)
             
@@ -448,6 +451,14 @@ while cap.isOpened():
                     )
                     
                     # Filter
+                    # Initialize filters for this hand if not exists (check ONCE per hand, not per landmark)
+                    if hand_idx not in two_stage_filters:
+                        two_stage_filters[hand_idx] = {
+                            lm_idx: OneEuroFilter(min_cutoff=1.0, beta=0.007, d_cutoff=1.0)
+                            for lm_idx in range(21)
+                        }
+
+                    # Filter all landmarks
                     pts_filtered = []
                     for lm_idx, (x, y) in enumerate(pts_raw):
                         filt_pos = two_stage_filters[hand_idx][lm_idx].update(
