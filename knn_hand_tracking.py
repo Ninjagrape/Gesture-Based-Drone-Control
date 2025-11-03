@@ -127,7 +127,6 @@ class KNNGesture:
         print(f"[INFO] loaded model ← {os.path.abspath(path)}")
         return obj
 
-
 class GestureHands:
     def __init__(self):
         self.landmark_history = {0: [], 1: []}
@@ -146,7 +145,7 @@ class GestureHands:
         return None
 
 
-#DRAWING FUNCTIONS---------------------------------------------------------------------------
+# DRAWING FUNCTIONS---------------------------------------------------------------------------
 def draw_landmarks_on_image(image, detection_result):
     annotated_image = np.copy(image)
     if detection_result.hand_landmarks:
@@ -168,7 +167,6 @@ def draw_landmarks_on_image(image, detection_result):
                 cv2.line(annotated_image, (x1, y1), (x2, y2), (0, 255, 0), 2)
     return annotated_image
 
-
 def draw_gesture_label(image, hand_or_box, gesture, *, pad=12):
     if hand_or_box is None:
         return image
@@ -184,7 +182,7 @@ def draw_gesture_label(image, hand_or_box, gesture, *, pad=12):
     return image
 
 
-#HELPER FUNCTIONS-------------------------------------------------------------------------------------------
+# HELPER FUNCTIONS-------------------------------------------------------------------------------------------
 def palm_facing_camera(result):
     # Check if handedness data exists (two-stage model doesn't provide it)
     if not hasattr(result, 'handedness') or not result.handedness:
@@ -261,7 +259,8 @@ def extract_features_from_hand(hand_landmarks):
 def kn_ready(kn):
     return kn and kn.is_trained and hasattr(kn.clf, "_fit_X") and len(kn.clf._fit_X) >= 1
 
-#MAIN SETUP----------------------------------------------------------------------------------------------------
+
+# MAIN SETUP----------------------------------------------------------------------------------------------------
 
 cap = cv2.VideoCapture(0)
 fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
@@ -359,7 +358,7 @@ print("="*60 + "\n")
 # Before the main loop, open a file for writing
 output_file = open('filter_testing_data/thumb_tracking.txt', 'w')
 output_file.write("# Thumb Tracking Data\n")
-output_file.write("# thumb_tip_x, thumb_tip_y, thumb_tip_z\n")
+output_file.write("# marker_x, marker_y, marker_z\n")
 
 # MAIN LOOP--------------------------------------------------------------
 while cap.isOpened():
@@ -482,10 +481,10 @@ while cap.isOpened():
     # Save landmark position to txt file for filter tuning
     if detection_result.hand_world_landmarks:
         for hand_landmarks in detection_result.hand_world_landmarks:
-            thumb_tip = hand_landmarks[0]  # Thumb tip is landmark index 4
+            marker = hand_landmarks[0]  # Thumb tip is landmark index 0
             
-            # Write to file: timestamp, x, y, z (in meters)
-            output_file.write(f"{thumb_tip.x:.6f}, {thumb_tip.y:.6f}, {thumb_tip.z:.6f}\n")
+            # Write to file: x, y, z (in meters)
+            output_file.write(f"{marker.x * 100:.6f}, {marker.y * 100:.6f}, {marker.z * 100:.6f}\n")
             output_file.flush()  # Ensure data is written immediately
 
 
@@ -706,6 +705,7 @@ while cap.isOpened():
         print("[INFO] Filter reset")
 
     if k == ord('t'):
+        print("[INFO] Model Change Toggled...")
         USE_TWO_STAGE = not USE_TWO_STAGE
         print(f"[INFO] Model: {'Two-Stage' if USE_TWO_STAGE else 'Single-Stage'}")
 

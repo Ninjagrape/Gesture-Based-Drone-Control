@@ -52,7 +52,7 @@ def load_thumb_data(filename):
             if len(values) == 3:
                 x, y, z = [float(v.strip()) for v in values]
                 # Convert to cm (assuming data is in meters)
-                positions.append([x * 100, y * 100, z * 100])
+                positions.append([x, y, z])
     
     positions = np.array(positions)
     
@@ -62,17 +62,119 @@ def load_thumb_data(filename):
     return positions, timestamps
 
 
+def calculate_statistics(positions, label="Data"):
+    """Calculate comprehensive statistics for position data"""
+    
+    # Basic statistics
+    mean = np.mean(positions, axis=0)
+    std = np.std(positions, axis=0)
+    min_val = np.min(positions, axis=0)
+    max_val = np.max(positions, axis=0)
+    range_val = max_val - min_val
+    
+    # Jitter (frame-to-frame variation)
+    if len(positions) > 1:
+        frame_diff = np.diff(positions, axis=0)
+        jitter = np.std(frame_diff, axis=0)
+        max_jitter = np.max(np.abs(frame_diff), axis=0)
+        mean_jitter = np.mean(np.abs(frame_diff), axis=0)
+    else:
+        jitter = np.zeros(3)
+        max_jitter = np.zeros(3)
+        mean_jitter = np.zeros(3)
+    
+    # Overall metrics
+    total_std = np.linalg.norm(std)
+    total_jitter = np.linalg.norm(jitter)
+    
+    return {
+        'label': label,
+        'mean': mean,
+        'std': std,
+        'min': min_val,
+        'max': max_val,
+        'range': range_val,
+        'jitter': jitter,
+        'max_jitter': max_jitter,
+        'mean_jitter': mean_jitter,
+        'total_std': total_std,
+        'total_jitter': total_jitter
+    }
+
+
+def print_statistics(stats):
+    """Pretty print statistics"""
+    print(f"\n{'='*70}")
+    print(f"  {stats['label'].upper()}")
+    print(f"{'='*70}")
+    
+    print(f"\n📊 Position Statistics (cm):")
+    print(f"  Mean:   X={stats['mean'][0]:+7.3f}  Y={stats['mean'][1]:+7.3f}  Z={stats['mean'][2]:+7.3f}")
+    print(f"  Std:    X={stats['std'][0]:7.4f}  Y={stats['std'][1]:7.4f}  Z={stats['std'][2]:7.4f}")
+    print(f"  Range:  X={stats['range'][0]:7.4f}  Y={stats['range'][1]:7.4f}  Z={stats['range'][2]:7.4f}")
+    print(f"  Min:    X={stats['min'][0]:+7.3f}  Y={stats['min'][1]:+7.3f}  Z={stats['min'][2]:+7.3f}")
+    print(f"  Max:    X={stats['max'][0]:+7.3f}  Y={stats['max'][1]:+7.3f}  Z={stats['max'][2]:+7.3f}")
+    
+    print(f"\n📈 Jitter Analysis (frame-to-frame variation, cm):")
+    print(f"  Std:    X={stats['jitter'][0]:7.4f}  Y={stats['jitter'][1]:7.4f}  Z={stats['jitter'][2]:7.4f}")
+    print(f"  Mean:   X={stats['mean_jitter'][0]:7.4f}  Y={stats['mean_jitter'][1]:7.4f}  Z={stats['mean_jitter'][2]:7.4f}")
+    print(f"  Max:    X={stats['max_jitter'][0]:7.4f}  Y={stats['max_jitter'][1]:7.4f}  Z={stats['max_jitter'][2]:7.4f}")
+    
+    print(f"\n🎯 Overall Metrics:")
+    print(f"  Total Std Dev:    {stats['total_std']:.4f} cm")
+    print(f"  Total Jitter:     {stats['total_jitter']:.4f} cm")
+
+
+def compare_filters(raw_stats, filtered_stats_list):
+    """Compare raw vs filtered performance"""
+    
+    print(f"\n{'='*70}")
+    print(f"  FILTER COMPARISON")
+    print(f"{'='*70}")
+    
+    print(f"\n{'Filter':<20} {'Std X':<10} {'Std Y':<10} {'Std Z':<10} {'Total':<10} {'Reduction'}")
+    print(f"{'-'*70}")
+    
+    # Raw baseline
+    print(f"{'Raw (baseline)':<20} {raw_stats['std'][0]:<10.4f} {raw_stats['std'][1]:<10.4f} "
+          f"{raw_stats['std'][2]:<10.4f} {raw_stats['total_std']:<10.4f} {'—'}")
+    
+    # Filtered results
+    for fstats in filtered_stats_list:
+        reduction = (1 - fstats['total_std'] / raw_stats['total_std']) * 100
+        print(f"{fstats['label']:<20} {fstats['std'][0]:<10.4f} {fstats['std'][1]:<10.4f} "
+              f"{fstats['std'][2]:<10.4f} {fstats['total_std']:<10.4f} {reduction:>6.1f}%")
+    
+    print(f"\n{'Filter':<20} {'Jitter X':<10} {'Jitter Y':<10} {'Jitter Z':<10} {'Total':<10} {'Reduction'}")
+    print(f"{'-'*70}")
+    
+    # Raw baseline
+    print(f"{'Raw (baseline)':<20} {raw_stats['jitter'][0]:<10.4f} {raw_stats['jitter'][1]:<10.4f} "
+          f"{raw_stats['jitter'][2]:<10.4f} {raw_stats['total_jitter']:<10.4f} {'—'}")
+    
+    # Filtered results
+    for fstats in filtered_stats_list:
+        reduction = (1 - fstats['total_jitter'] / raw_stats['total_jitter']) * 100
+        print(f"{fstats['label']:<20} {fstats['jitter'][0]:<10.4f} {fstats['jitter'][1]:<10.4f} "
+              f"{fstats['jitter'][2]:<10.4f} {fstats['total_jitter']:<10.4f} {reduction:>6.1f}%")
+
+
 def test_filters(filename):
     """Test all three filters on the data"""
     
     positions, timestamps = load_thumb_data(filename)
     
-    print(f"Loaded {len(positions)} thumb positions")
-    print(f"Duration: {timestamps[-1]:.2f} seconds")
+    print(f"\n{'='*70}")
+    print(f"  DATA LOADING")
+    print(f"{'='*70}")
+    print(f"  File:      {filename}")
+    print(f"  Samples:   {len(positions)}")
+    print(f"  Duration:  {timestamps[-1]:.2f} seconds")
+    print(f"  FPS:       ~{len(positions)/timestamps[-1]:.1f}")
     
-    # Calculate raw jitter statistics
-    raw_std = np.std(positions, axis=0)
-    print(f"\nRaw data std dev: X={raw_std[0]:.4f}, Y={raw_std[1]:.4f}, Z={raw_std[2]:.4f} cm")
+    # Calculate raw statistics
+    raw_stats = calculate_statistics(positions, "Raw Data")
+    print_statistics(raw_stats)
     
     # Initialize filters
     velocity_filter = VelocityBasedLowPassFilter(
@@ -83,7 +185,6 @@ def test_filters(filename):
     
     one_euro_filter = OneEuroFilter(
         min_cutoff=1.0,
-        # beta=0.007,
         beta=0.05,
         d_cutoff=1.0
     )
@@ -104,26 +205,53 @@ def test_filters(filename):
     euro_filtered = np.array(euro_filtered)
     ema_filtered = np.array(ema_filtered)
     
-    # Calculate filtered jitter statistics
-    vel_std = np.std(velocity_filtered, axis=0)
-    euro_std = np.std(euro_filtered, axis=0)
-    ema_std = np.std(ema_filtered, axis=0)
+    # Calculate filtered statistics
+    vel_stats = calculate_statistics(velocity_filtered, "Velocity Filter")
+    euro_stats = calculate_statistics(euro_filtered, "One Euro Filter")
+    ema_stats = calculate_statistics(ema_filtered, "Simple EMA")
     
-    print(f"\nVelocity Filter std dev: X={vel_std[0]:.4f}, Y={vel_std[1]:.4f}, Z={vel_std[2]:.4f} cm")
-    print(f"One Euro Filter std dev: X={euro_std[0]:.4f}, Y={euro_std[1]:.4f}, Z={euro_std[2]:.4f} cm")
-    print(f"Simple EMA std dev: X={ema_std[0]:.4f}, Y={ema_std[1]:.4f}, Z={ema_std[2]:.4f} cm")
+    print_statistics(vel_stats)
+    print_statistics(euro_stats)
+    print_statistics(ema_stats)
     
-    print(f"\nJitter reduction:")
-    print(f"Velocity Filter: {(1 - np.mean(vel_std) / np.mean(raw_std)) * 100:.1f}%")
-    print(f"One Euro Filter: {(1 - np.mean(euro_std) / np.mean(raw_std)) * 100:.1f}%")
-    print(f"Simple EMA: {(1 - np.mean(ema_std) / np.mean(raw_std)) * 100:.1f}%")
+    # Compare all filters
+    compare_filters(raw_stats, [vel_stats, euro_stats, ema_stats])
+    
+    # Benchmark verdict
+    print(f"\n{'='*70}")
+    print(f"  BENCHMARK VERDICT (Stationary Hand Test)")
+    print(f"{'='*70}")
+    
+    acceptable_std = 0.5  # cm
+    acceptable_jitter = 0.3  # cm
+    
+    print(f"\n✅ PASS Criteria:")
+    print(f"  - Total Std Dev < {acceptable_std} cm")
+    print(f"  - Total Jitter < {acceptable_jitter} cm")
+    
+    print(f"\n📋 Results:")
+    for fstats in [vel_stats, euro_stats, ema_stats]:
+        std_pass = "✅ PASS" if fstats['total_std'] < acceptable_std else "❌ FAIL"
+        jitter_pass = "✅ PASS" if fstats['total_jitter'] < acceptable_jitter else "❌ FAIL"
+        
+        print(f"\n  {fstats['label']}:")
+        print(f"    Std Dev: {fstats['total_std']:.4f} cm  {std_pass}")
+        print(f"    Jitter:  {fstats['total_jitter']:.4f} cm  {jitter_pass}")
+    
+    print(f"\n{'='*70}\n")
     
     return {
         'timestamps': timestamps,
         'raw': positions,
         'velocity': velocity_filtered,
         'euro': euro_filtered,
-        'ema': ema_filtered
+        'ema': ema_filtered,
+        'stats': {
+            'raw': raw_stats,
+            'velocity': vel_stats,
+            'euro': euro_stats,
+            'ema': ema_stats
+        }
     }
 
 
@@ -205,8 +333,8 @@ def plot_results(results):
 
 if __name__ == '__main__':
     # Load data from file
-
-    results = test_filters('filter_testing_data/thumb_tracking.txt')
+    # results = test_filters('filter_testing_data/thumb_tracking.txt')
+    results = test_filters('filter_testing_data/monocular_tracking_data.txt')
     # results = test_filters('filter_testing_data/hand_keypoints_pinky.txt')
 
     plot_results(results)

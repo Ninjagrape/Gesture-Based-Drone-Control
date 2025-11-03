@@ -320,7 +320,7 @@ max_velocity = 50.0        # cm/s
 - [ ] Transfer learning from pre-trained models
 - [ ] Real-time performance optimization (GPU acceleration)
 
-## 📚 References
+## References
 
 ### Academic Papers
 1. Casiez, G., Roussel, N. and Vogel, D. (2012). "1€ Filter: A Simple Speed-based Low-pass Filter for Noisy Input in Interactive Systems"

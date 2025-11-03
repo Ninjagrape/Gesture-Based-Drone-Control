@@ -12,7 +12,6 @@ class Wrist3DTracker:
     
     def __init__(self, frame_width=640):
         self.focal_length = frame_width
-        self.real_hand_length = 19.0  # cm
         
         # One Euro Filter for smooth tracking
         self.position_filter = OneEuroFilter(
@@ -35,13 +34,13 @@ class Wrist3DTracker:
         h, w = frame_shape[:2]
         
         bone_segments = [
-            (0, 5, 6.5, 1.0),   # Wrist to index MCP
-            (0, 9, 7.0, 1.0),   # Wrist to middle MCP
-            (0, 13, 6.8, 1.0),  # Wrist to ring MCP
-            (0, 17, 5.5, 0.9),  # Wrist to pinky MCP
-            (5, 6, 2.5, 1.2),   # Index proximal phalanx
-            (9, 10, 2.8, 1.2),  # Middle proximal phalanx
-            (13, 14, 2.5, 1.1), # Ring proximal phalanx
+            (0, 5, 8.5, 1.0),   # Wrist to index MCP
+            (0, 9, 9.0, 1.0),   # Wrist to middle MCP
+            (0, 13, 8.8, 1.0),  # Wrist to ring MCP
+            (0, 17, 7.5, 0.9),  # Wrist to pinky MCP
+            (5, 6, 4.5, 1.2),   # Index proximal phalanx
+            (9, 10, 4.8, 1.2),  # Middle proximal phalanx
+            (13, 14, 4.5, 1.1), # Ring proximal phalanx
         ]
         
         depth_estimates = []
@@ -185,85 +184,164 @@ class Wrist3DTracker:
         """Reset the position filter"""
         self.position_filter.reset()
 
-# # ===================== MAIN LOOP =====================
+# ===================== MAIN/TEST SECTION =====================
+if __name__ == "__main__":
+    import cv2
+    import mediapipe as mp
+    from mediapipe.tasks import python
+    from mediapipe.tasks.python import vision
+    import os
 
-# print("=" * 60)
-# print("3D WRIST TRACKER WITH LOW-PASS FILTERING")
-# print("=" * 60)
-# print("\nControls:")
-# print("  'S' - Set reference position")
-# print("  'R' - Reset tracking")
-# print("  'F' - Reset filter")
-# print("  'Q' - Quit")
-# print("=" * 60)
+    # Initialize MediaPipe
+    model_path = 'hand_landmarker.task'
+    if os.path.isabs(model_path):
+        model_path = os.path.basename(model_path)
 
-# while cap.isOpened():
-#     ret, frame = cap.read()
-#     if not ret:
-#         break
+    base_options = python.BaseOptions(model_asset_path=model_path)
+    options = vision.HandLandmarkerOptions(base_options=base_options, num_hands=1)
+    detector = vision.HandLandmarker.create_from_options(options)
 
-#     frame = cv2.flip(frame, 1)
-#     pos_3d, pos_2d, hand_landmarks = get_wrist_position_3d(frame)
+    # Initialize tracker
+    cap = cv2.VideoCapture(0)
+    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    
+    tracker = Wrist3DTracker(frame_width=w)
+    tracking_active = False
 
-#     if pos_3d is not None and pos_2d is not None:
-#         # Draw wrist point
-#         cv2.circle(frame, pos_2d, 10, (0, 255, 0), -1)
+    # File will be opened when tracking starts
+    output_file = None
 
-#         # Draw hand skeleton
-#         if hand_landmarks:
-#             mp_draw.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
+    print("=" * 60)
+    print("3D WRIST TRACKER - DISPLACEMENT MEASUREMENT")
+    print("=" * 60)
+    print("\nControls:")
+    print("  'Space' - Set reference position and START recording")
+    print("  'R' - Reset tracking and STOP recording")
+    print("  'F' - Reset filter")
+    print("  'Q' - Quit")
+    print("=" * 60)
+    print("\n💡 Press SPACE to set reference and begin recording displacement\n")
 
-#         # Get velocity from filter
-#         velocity = position_filter.get_velocity()
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
 
-#         # Display current 3D position
-#         pos_text = f"Pos: X={pos_3d[0]:.1f} Y={pos_3d[1]:.1f} Z={pos_3d[2]:.1f} cm"
-#         cv2.putText(frame, pos_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+        frame = cv2.flip(frame, 1)
         
-#         # Display velocity
-#         vel_text = f"Velocity: {velocity:.1f} cm/s"
-#         cv2.putText(frame, vel_text, (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+        # Detect hand
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
+        detection_result = detector.detect(mp_image)
 
-#         if tracking_active:
-#             movement = calculate_movement_3d(pos_3d)
-#             if movement:
-#                 info_text = [
-#                     f"3D Distance: {movement['distance_3d']:.1f} cm",
-#                     f"Delta X: {movement['dx']:+.1f} cm (left/right)",
-#                     f"Delta Y: {movement['dy']:+.1f} cm (up/down)",
-#                     f"Delta Z: {movement['dz']:+.1f} cm (depth)",
-#                     f"XY Angle: {movement['angle_xy']:.0f}°",
-#                     f"Z Angle: {movement['angle_z']:.0f}°"
-#                 ]
-#                 y_offset = 100
-#                 for text in info_text:
-#                     cv2.putText(frame, text, (10, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-#                     y_offset += 30
+        pos_3d = None
+        pos_2d = None
 
-#                 depth_color = (0, 255, 0)
-#                 if movement['dz'] > 2:
-#                     depth_color = (0, 0, 255)
-#                 elif movement['dz'] < -2:
-#                     depth_color = (255, 0, 0)
-#                 cv2.circle(frame, pos_2d, 15, depth_color, 3)
+        if detection_result.hand_landmarks:
+            hand_landmarks = detection_result.hand_landmarks[0]
+            
+            # Get 3D position
+            pos_3d = tracker.get_wrist_position_3d(hand_landmarks, (h, w))
+            
+            # Get 2D wrist position for drawing
+            wrist = hand_landmarks[0]
+            pos_2d = (int(wrist.x * w), int(wrist.y * h))
 
-#     # Display tracking status
-#     status = "Tracking: ON" if tracking_active else "Tracking: OFF"
-#     status_color = (0, 255, 0) if tracking_active else (0, 0, 255)
-#     cv2.putText(frame, status, (10, frame.shape[0] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, status_color, 2)
+            # Draw wrist point
+            cv2.circle(frame, pos_2d, 10, (0, 255, 0), -1)
 
-#     cv2.imshow('3D Wrist Tracker', frame)
+            # Draw hand skeleton
+            for connection in mp.solutions.hands.HAND_CONNECTIONS:
+                start_idx = connection[0]
+                end_idx = connection[1]
+                
+                start_landmark = hand_landmarks[start_idx]
+                end_landmark = hand_landmarks[end_idx]
+                
+                start_point = (int(start_landmark.x * w), int(start_landmark.y * h))
+                end_point = (int(end_landmark.x * w), int(end_landmark.y * h))
+                
+                cv2.line(frame, start_point, end_point, (0, 255, 0), 2)
 
-#     # Key controls
-#     key = cv2.waitKey(1) & 0xFF
-#     if key == ord('q'):
-#         break
-#     elif key == ord('s') and pos_3d is not None:
-#         set_reference_position(pos_3d)
-#     elif key == ord('r'):
-#         reset_tracking()
-#     elif key == ord('f'):
-#         reset_filter()
+            # Display current 3D position
+            pos_text = f"Pos: X={pos_3d[0]:.1f} Y={pos_3d[1]:.1f} Z={pos_3d[2]:.1f} cm"
+            cv2.putText(frame, pos_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
 
-# cap.release()
-# cv2.destroyAllWindows()
+            if tracking_active and tracker.reference_position is not None:
+                # Get displacement info
+                displacement = tracker.get_displacement_info(pos_3d)
+                
+                if displacement:
+                    # Save displacement to file (same values shown on screen)
+                    if output_file is not None:
+                        output_file.write(f"{displacement['dx']:+.6f}, {displacement['dy']:+.6f}, {displacement['dz']:+.6f}\n")
+                        output_file.flush()
+                    
+                    info_text = [
+                        f"Displacement:",
+                        f"  X: {displacement['dx']:+.1f} cm",
+                        f"  Y: {displacement['dy']:+.1f} cm",
+                        f"  Z: {displacement['dz']:+.1f} cm",
+                        f"Total: {displacement['distance']:.1f} cm"
+                    ]
+                    
+                    y_offset = 70
+                    for text in info_text:
+                        cv2.putText(frame, text, (10, y_offset), 
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                        y_offset += 30
+
+                    # Color code wrist by depth displacement
+                    depth_color = (0, 255, 0)  # Green = neutral
+                    if displacement['dz'] > 3:
+                        depth_color = (0, 0, 255)  # Red = moving away
+                    elif displacement['dz'] < -3:
+                        depth_color = (255, 0, 0)  # Blue = moving closer
+                    cv2.circle(frame, pos_2d, 15, depth_color, 3)
+
+        # Display tracking status
+        status = "Recording: ON" if tracking_active else "Recording: OFF"
+        status_color = (0, 255, 0) if tracking_active else (0, 0, 255)
+        cv2.putText(frame, status, (10, frame.shape[0] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, status_color, 2)
+
+        cv2.imshow('3D Wrist Tracker', frame)
+
+        # Key controls
+        key = cv2.waitKey(1) & 0xFF
+        if key == ord('q'):
+            break
+        elif key == ord(' ') and pos_3d is not None:
+            # Start tracking and open file
+            tracker.set_reference(pos_3d)
+            tracking_active = True
+            
+            # Open new file for this recording session
+            if output_file is not None:
+                output_file.close()
+            output_file = open('filter_testing_data/monocular_tracking_data.txt', 'w')
+            output_file.write("# Monocular Depth Displacement Data\n")
+            output_file.write("# delta_x, delta_y, delta_z (in cm, relative to reference)\n")
+            print("\Started recording displacement to: monocular_tracking_data.txt")
+            
+        elif key == ord('r'):
+            # Stop tracking and close file
+            tracker.clear_reference()
+            tracking_active = False
+            
+            if output_file is not None:
+                output_file.close()
+                output_file = None
+                print("\n✅ Stopped recording. Data saved to: monocular_tracking_data.txt")
+                
+        elif key == ord('f'):
+            tracker.reset_filter()
+
+    # Close file and cleanup
+    if output_file is not None:
+        output_file.close()
+        print(f"\n✅ Final data saved to: monocular_tracking_data.txt")
+    
+    cap.release()
+    cv2.destroyAllWindows()
+    detector.close()
