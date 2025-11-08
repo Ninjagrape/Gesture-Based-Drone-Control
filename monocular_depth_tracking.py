@@ -221,7 +221,7 @@ if __name__ == "__main__":
     print("  'F' - Reset filter")
     print("  'Q' - Quit")
     print("=" * 60)
-    print("\n💡 Press SPACE to set reference and begin recording displacement\n")
+    print("\nPress SPACE to set reference and begin recording displacement\n")
 
     while cap.isOpened():
         ret, frame = cap.read()
@@ -332,7 +332,7 @@ if __name__ == "__main__":
             if output_file is not None:
                 output_file.close()
                 output_file = None
-                print("\n✅ Stopped recording. Data saved to: monocular_tracking_data.txt")
+                print("\nStopped recording. Data saved to: monocular_tracking_data.txt")
                 
         elif key == ord('f'):
             tracker.reset_filter()
@@ -340,7 +340,7 @@ if __name__ == "__main__":
     # Close file and cleanup
     if output_file is not None:
         output_file.close()
-        print(f"\n✅ Final data saved to: monocular_tracking_data.txt")
+        print(f"\nFinal data saved to: monocular_tracking_data.txt")
     
     cap.release()
     cv2.destroyAllWindows()

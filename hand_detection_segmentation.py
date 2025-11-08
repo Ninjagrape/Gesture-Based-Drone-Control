@@ -3,6 +3,7 @@ import numpy as np
 from collections import deque
 
 ### Segmentation based palm detection
+# Note from Morris. This was done as a test to identify elbow landmarks via removing palm. Not robust to lighting conditions
 
 # Configuration
 wrist_extension_ratio = 1.2
@@ -43,11 +44,11 @@ def detect_skin(frame):
     Robust skin segmentation combining YCrCb and HSV color spaces
     with adaptive thresholding.
     """
-    # --- Convert color spaces ---
+    # Convert color spaces
     ycrcb = cv2.cvtColor(frame, cv2.COLOR_BGR2YCrCb)
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
-    # --- Static ranges tuned for inclusivity ---
+    # Static ranges tuned for inclusivity
     ycrcb_lower = np.array([0, 133, 77], dtype=np.uint8)
     ycrcb_upper = np.array([255, 173, 127], dtype=np.uint8)
 
@@ -57,10 +58,10 @@ def detect_skin(frame):
     mask_ycrcb = cv2.inRange(ycrcb, ycrcb_lower, ycrcb_upper)
     mask_hsv = cv2.inRange(hsv, hsv_lower, hsv_upper)
 
-    # --- Combine masks ---
+    # Combine masks
     combined_mask = cv2.bitwise_and(mask_ycrcb, mask_hsv)
 
-    # --- Adaptive refinement ---
+    # Adaptive refinement
     # Compute global skin color bias (using the mask itself)
     skin_pixels = cv2.mean(ycrcb, mask=combined_mask)
     Cr_mean, Cb_mean = skin_pixels[1], skin_pixels[2]
@@ -72,7 +73,7 @@ def detect_skin(frame):
     adapt_mask = cv2.inRange(ycrcb, lower_adapt, upper_adapt)
     final_mask = cv2.bitwise_and(combined_mask, adapt_mask)
 
-    # --- Morphological cleanup ---
+    # Morphological cleanup
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
     final_mask = cv2.morphologyEx(final_mask, cv2.MORPH_OPEN, kernel, iterations=2)
     final_mask = cv2.morphologyEx(final_mask, cv2.MORPH_CLOSE, kernel, iterations=2)
@@ -146,7 +147,7 @@ def calculate_palm_score(contour):
     perimeter = cv2.arcLength(contour, True)
     x, y, w, h = cv2.boundingRect(contour)
     
-    # 1. Aspect ratio - palms are more square, forearms are elongated
+    # Aspect ratio - palms are more square, forearms are elongated
     aspect_ratio = float(w) / h if h > 0 else 0
     features['aspect_ratio'] = aspect_ratio
     
@@ -155,14 +156,14 @@ def calculate_palm_score(contour):
     elif aspect_ratio < 0.4 or aspect_ratio > 2.5:
         score -= 20  # Too elongated (likely forearm)
     
-    # 2. Compactness - palms are more compact
+    # Compactness - palms are more compact
     compactness = 4 * np.pi * area / (perimeter * perimeter) if perimeter > 0 else 0
     features['compactness'] = compactness
     
     if compactness > 0.3:
         score += 20  # Compact shape
     
-    # 3. Convexity defects (fingers!)
+    # Convexity defects (fingers!)
     defects, defect_count, _ = analyze_convexity_defects(contour)
     features['defect_count'] = defect_count
     
@@ -175,7 +176,7 @@ def calculate_palm_score(contour):
     else:
         score -= 10  # Too many defects (noise)
     
-    # 4. Solidity - ratio of contour area to convex hull area
+    # Solidity - ratio of contour area to convex hull area
     hull = cv2.convexHull(contour)
     hull_area = cv2.contourArea(hull)
     solidity = float(area) / hull_area if hull_area > 0 else 0
@@ -186,7 +187,7 @@ def calculate_palm_score(contour):
     else:
         score -= 10  # Too convex (maybe forearm)
     
-    # 5. Circularity - palms are somewhat circular
+    # Circularity - palms are somewhat circular
     if area > 0:
         circularity = (perimeter ** 2) / (4 * np.pi * area)
         features['circularity'] = circularity
@@ -194,7 +195,7 @@ def calculate_palm_score(contour):
         if 1.2 < circularity < 4:
             score += 15  # Good palm-like circularity
     
-    # 6. Bounding box area ratio
+    # Bounding box area ratio
     bbox_area = w * h
     extent = float(area) / bbox_area if bbox_area > 0 else 0
     features['extent'] = extent

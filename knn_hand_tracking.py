@@ -1,7 +1,8 @@
 """
 knn_hand_tracking.py - KNN model to recognise gestures from mediapipe handlandmarker 21 keypoints
 
-Integrated with monocular depth tracking to provide drone control commands.
+Integrated with monocular depth tracking and orientation tracking to provide drone control commands.
+This is the main file
 """
 
 # LIBRARIES----------------------------------------------------------------------------------------------------------------------------------------------
@@ -24,8 +25,10 @@ from sklearn.neighbors import KNeighborsClassifier
 from monocular_depth_tracking import Wrist3DTracker
 from orientation_tracking import HandOrientationTracker
 
+# IMPORT FILTERS
 from lp_filt import OneEuroFilter
 
+# IMPORT DRONE SIM
 from drone_simulator import DroneSimulator
 
 from two_stage_detection import (
@@ -38,7 +41,7 @@ from two_stage_detection import (
 )
 
 
-#LANDMARK GLOBALS--------------------------------------------------------------------------------------
+# LANDMARK GLOBALS--------------------------------------------------------------------------------------
 WRIST = 0
 THUMB_FINGER  = [1, 2, 3, 4]
 INDEX_FINGER  = [5, 6, 7, 8]
@@ -285,7 +288,7 @@ mp_detector = None
 drone_sim = DroneSimulator(window_size=(800, 600))
 print("[INFO] Drone simulator initialized")
 
-# MediaPipe setup - handle Windows path issues
+# MediaPipe setup, handle Windows path issues
 model_path = 'hand_landmarker.task'
 if os.path.isabs(model_path):
     model_path = os.path.basename(model_path)
@@ -294,7 +297,7 @@ base_options = python.BaseOptions(model_asset_path=model_path)
 options = vision.HandLandmarkerOptions(base_options=base_options, num_hands=2)
 detector = vision.HandLandmarker.create_from_options(options)
 
-# # Video writer
+# # Video writer if Saving a demo video
 # fourcc = cv2.VideoWriter_fourcc(*"mp4v")
 # writer = cv2.VideoWriter("annotated.mp4", fourcc, fps, (w, h))
 
@@ -325,7 +328,7 @@ temporal_multi = GestureHands()
 stable_label = None
 gesture_stage = "idle"
 
-
+# Initialise filters for each landmarker
 filters = [
     OneEuroFilter(
         min_cutoff=1.0,

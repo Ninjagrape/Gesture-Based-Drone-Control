@@ -291,6 +291,7 @@ def draw_hand_connections(frame, landmarks):
         if a < len(landmarks) and b < len(landmarks):
             cv2.line(frame, landmarks[a], landmarks[b], (40, 220, 255), LINE_THICKNESS)
 
+# Initialise all filters for landmarks
 def create_landmark_filters(num_landmarks=21, per_hand=2):
     """
     Create One Euro filters for all landmarks

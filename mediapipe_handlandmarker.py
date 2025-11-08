@@ -1,5 +1,8 @@
 """
-mediapipe_handlandmarker.py - Sample code from Google on how to run the handlandmarker model"""
+mediapipe_handlandmarker.py - Sample code from Google on how to run the handlandmarker model
+"""
+
+# Use this to test if there are any pathing issues or package issues with mediapipe
 
 
 import mediapipe as mp
