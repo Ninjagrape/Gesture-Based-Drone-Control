@@ -64,7 +64,7 @@ class KNNGesture:
     def __init__(self, n_neighbors=5):
         self.base_k = n_neighbors  # remember requested k
         self.scaler = StandardScaler()
-        self.clf = KNeighborsClassifier(n_neighbors=n_neighbors, weights='distance')
+        self.clf = KNeighborsClassifier(n_neighbors=n_neighbors, weights='distance', metric='euclidean')
         self.X, self.y = [], []
         self.is_trained = False
         
@@ -321,8 +321,8 @@ recording = False
 samples_left = 0
 
 # Load or create models
-knn_static = KNNGesture.load("gesture_static.pkl") or KNNGesture(n_neighbors=7)
-knn_dynamic = KNNGesture.load("gesture_dynamic.pkl") or KNNGesture(n_neighbors=7)
+knn_static = KNNGesture.load("gesture_static.pkl") or KNNGesture(n_neighbors=5)
+knn_dynamic = KNNGesture.load("gesture_dynamic.pkl") or KNNGesture(n_neighbors=5)
 
 temporal_multi = GestureHands()
 stable_label = None
@@ -695,6 +695,7 @@ while cap.isOpened():
     k = cv2.waitKey(1) & 0xFF
     
     if k == ord('q'):
+    #UNCOMMENT WHEN TRAINING FOCUSED
         # if knn_static.is_trained:
         #     knn_static.save("gesture_static.pkl")
         #     print("[INFO] static gesture saved")
@@ -708,7 +709,8 @@ while cap.isOpened():
     if k in STATIC_GESTURE_KEYS:
         current_label = STATIC_GESTURE_KEYS[k]
         print(f"[INFO] Label → {current_label}")
-    
+        
+    #UNCOMMENT WHEN TRAINING FOCUSED
     # if k == ord('r'):
     #     recording = True
     #     samples_left = N_SAMPLES
