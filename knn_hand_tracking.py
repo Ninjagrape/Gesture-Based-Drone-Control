@@ -2,7 +2,8 @@
 knn_hand_tracking.py - KNN model to recognise gestures from mediapipe handlandmarker 21 keypoints
 
 Integrated with monocular depth tracking and orientation tracking to provide drone control commands.
-This is the main file
+
+This is the MAIN file
 """
 
 # LIBRARIES----------------------------------------------------------------------------------------------------------------------------------------------
@@ -11,11 +12,8 @@ from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 import cv2
 import numpy as np
-import pandas as pd
-from collections import deque
 import pickle 
 import os
-import math
 import time
 
 from sklearn.preprocessing import StandardScaler
@@ -31,6 +29,7 @@ from lp_filt import OneEuroFilter
 # IMPORT DRONE SIM
 from drone_simulator import DroneSimulator
 
+#IMPORT TWO STAGE DETECTION 
 from two_stage_detection import (
     detect_palm_regions,
     run_mediapipe_hands,
@@ -62,6 +61,9 @@ THUMB, INDEX, MIDDLE, RING, PINKY = 0, 1, 2, 3, 4
 # KNN CLASSES------------------------------------------------------------------------------------
 class KNNGesture:
     def __init__(self, n_neighbors=5):
+        """
+        init with base k and euclidean, distance-weighted voting
+        """
         self.base_k = n_neighbors  # remember requested k
         self.scaler = StandardScaler()
         self.clf = KNeighborsClassifier(n_neighbors=n_neighbors, weights='distance', metric='euclidean')
@@ -69,21 +71,33 @@ class KNNGesture:
         self.is_trained = False
         
     def _effective_k(self):
+        """
+        compute effective k bounded by fitted sample count
+        """
         # determine k <= number of fitted samples (and >=1)
         nfit = len(getattr(self.clf, "_fit_X", []))
         return max(1, min(self.base_k, nfit)) if nfit else 1
 
     def _apply_k(self):
+        """
+        apply effective k to the classifier if changed
+        """
         # update the classifier's k right before use
         k_eff = self._effective_k()
         if getattr(self.clf, "n_neighbors", None) != k_eff:
             self.clf.n_neighbors = k_eff  # safe to tweak between calls
             
     def add_sample(self, feats, label):
+        """
+        append one training sample
+        """
         self.X.append(feats.astype(np.float32))
         self.y.append(label)
 
     def fit(self):
+        """
+        fit scaler and knn if enough samples exist
+        """
         if len(self.X) < 2:
             print("[WARN] not enough samples to train")
             return
@@ -95,6 +109,9 @@ class KNNGesture:
         print(f"[INFO] trained knn on {len(self.y)} samples, classes={sorted(set(self.y))}")
 
     def predict(self, feats):
+        """
+        predict label and confidence for a single feature vector
+        """
         if not self.is_trained or not hasattr(self.clf, "_fit_X") or len(self.clf._fit_X) == 0:
             return "none", 0.0  # CHANGED: was None, 0.0
         self._apply_k()  # re-clamp in case you've added more later
@@ -104,13 +121,16 @@ class KNNGesture:
         return pred, proba
     
     def save(self, path="gesture_knn.pkl"):
+        """
+        serialise scaler and classifier
+        """
         if not self.is_trained:
             print("[WARN] model not trained. nothing saved")
             return
         payload = {
             "scaler": self.scaler,
             "clf": self.clf,
-            "feature_dim": self.clf._fit_X.shape[1] if hasattr(self.clf, "_fit_X") else None,  # NEW
+            "feature_dim": self.clf._fit_X.shape[1] if hasattr(self.clf, "_fit_X") else None,  
         }
         with open(path, "wb") as f:
             pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
@@ -118,6 +138,10 @@ class KNNGesture:
 
     @classmethod
     def load(cls, path="gesture_knn.pkl"):
+        """
+        load a previously saved model
+        returns instance or none
+        """
         if not os.path.isfile(path):
             print(f"[INFO] no saved model at {path}")
             return None
@@ -131,10 +155,15 @@ class KNNGesture:
         return obj
 
 class GestureHands:
+#track simple per hand motion history for dynamic gestures 
     def __init__(self):
+        #init temporal history per hand index
         self.landmark_history = {0: [], 1: []}
 
     def track_gesture_motion(self, hand_index, hand_landmarks):
+        """ 
+        update history and return mean velocity vector or none
+        """
         hist = self.landmark_history[hand_index]
         palm_center = hand_landmarks[0]
         hist.append([palm_center.x, palm_center.y, getattr(palm_center, "z", 0.0)])
@@ -150,6 +179,9 @@ class GestureHands:
 
 # DRAWING FUNCTIONS---------------------------------------------------------------------------
 def draw_landmarks_on_image(image, detection_result):
+    """
+    render detected hand landmarks and connections onto an image
+    """
     annotated_image = np.copy(image)
     if detection_result.hand_landmarks:
         for hand_landmarks in detection_result.hand_landmarks:
@@ -171,6 +203,9 @@ def draw_landmarks_on_image(image, detection_result):
     return annotated_image
 
 def draw_gesture_label(image, hand_or_box, gesture, *, pad=12):
+    """
+    draw a thin box and text label near a hand region
+    """
     if hand_or_box is None:
         return image
     h, w = image.shape[:2]
@@ -187,6 +222,9 @@ def draw_gesture_label(image, hand_or_box, gesture, *, pad=12):
 
 # HELPER FUNCTIONS-------------------------------------------------------------------------------------------
 def palm_facing_camera(result):
+    """
+    estimate palm orientation sign to gate certain gestures
+    """
     # Check if handedness data exists (two-stage model doesn't provide it)
     if not hasattr(result, 'handedness') or not result.handedness:
         return True  # Assume palm is facing camera if we can't determine
@@ -203,6 +241,9 @@ def palm_facing_camera(result):
     return (nz_palm <= 0) if hand == "Right" else (nz_palm >= 0)
 
 def finger_extended_mask(rel):
+    """
+    return a boolean mask of which fingers are extended
+    """
     # thumb uses cmc→mcp vs cmc→tip; others use mcp→pip vs mcp→tip
     chains = [
         (CMC[0],        MCP[THUMB],  FINGERTIPS[THUMB]),   # thumb:  cmc, mcp, tip
@@ -238,6 +279,9 @@ def extract_features_from_hand(hand_landmarks):
     rel /= base_span
 
     def angle(a, b, c):
+        """
+        compute joint angle at b given points a-b-c
+        """
         v1, v2 = a - b, c - b
         n1 = np.linalg.norm(v1) or 1e-6
         n2 = np.linalg.norm(v2) or 1e-6
@@ -251,7 +295,7 @@ def extract_features_from_hand(hand_landmarks):
     pinky_ang = angle(rel[0],  rel[17], rel[18])
     angles = np.array([thumb_ang, idx_ang, mid_ang, ring_ang, pinky_ang], dtype=np.float32)
 
-    # NEW: per-finger bits + count
+    # per-finger bits + count
     ext_bits = finger_extended_mask(rel).astype(np.float32)
     ext_count = np.array([ext_bits.sum() / 5.0], dtype=np.float32)
 
@@ -260,6 +304,7 @@ def extract_features_from_hand(hand_landmarks):
     return feats
 
 def kn_ready(kn):
+    #guard that knn has been trained with at least one sample
     return kn and kn.is_trained and hasattr(kn.clf, "_fit_X") and len(kn.clf._fit_X) >= 1
 
 
@@ -571,7 +616,7 @@ while cap.isOpened():
                 if pred in ("STOP", "GO") and not palm_facing_camera(detection_result):
                     pred, conf = "none", 0.0
 
-                # NEW: Finger count validation
+                # Finger count validation
                 if 1 <= ext_cnt <= 4 and pred == "STOP":
                     pred = "none"
 
@@ -590,7 +635,7 @@ while cap.isOpened():
                     gesture_stage = "idle"
                     stable_label = pred
                     wrist_tracker.clear_reference()
-                    orientation_tracker.clear_reference()  # ADD THIS LINE
+                    orientation_tracker.clear_reference()  
                     gesture_hold_start.pop(hi, None)
 
                 # Mode gestures require confirmation (debounce)
@@ -613,7 +658,7 @@ while cap.isOpened():
                                     wrist_tracker.set_reference(pos_3d)
                                 # Set reference for orientation tracking
                                 if new_stage == "rotating":
-                                    orientation_tracker.set_reference(hand)  # ADD THIS
+                                    orientation_tracker.set_reference(hand)  
                             gesture_hold_start.pop(hi, None)
             else:
                 gesture_hold_start.pop(hi, None)
@@ -625,7 +670,7 @@ while cap.isOpened():
                 commands = wrist_tracker.get_movement_commands(pos_3d)
                 displacement_info = wrist_tracker.get_displacement_info(pos_3d)
                 
-                # Orientation-based commands (NEW)
+                # Orientation-based commands
                 if gesture_stage == "rotating":
                     orientation_commands = orientation_tracker.get_rotation_commands(hand)
                     # Override with orientation commands in rotating mode
