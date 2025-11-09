@@ -1,3 +1,7 @@
+# two_stage_detection used skin segmentation method for palm detection and apply a bounding box 
+# around the palm region then integrate with Google Mediapipe model to display a full hand landmark
+
+
 import cv2
 import numpy as np
 import mediapipe as mp
@@ -32,7 +36,7 @@ def compute_iou(box_a, box_b):
     area_b = (bx2 - bx1) * (by2 - by1)
     return inter / float(area_a + area_b - inter + 1e-6)
 
-# Face mask with cascade
+# Face mask with Haar cascade
 def detect_faces_haar(frame, face_cascade):
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     return face_cascade.detectMultiScale(gray, 1.2, 5)
