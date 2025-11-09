@@ -112,7 +112,7 @@ The system operates in different control modes:
 - **ACCELERATE** (Closed fist ✊): Enter acceleration mode
 - **ROTATE** (devil horns 🤙): Enter rotation mode
 - **TRANSLATION** (Two fingers pointed in any comfortable direction👆): Enter motion mode
-- **GO** (pinch 🤏): Release drone from safemode
+- **GO** (make a gun with your hand): Release drone from safemode
 
 #### Exit Gestures (Static)
 - **STOP** (open palm, all 5 fingers extended ✋ ): Exit current mode and return to idle
@@ -293,6 +293,26 @@ base_alpha = 0.3
 velocity_threshold = 5.0   # cm/s
 max_velocity = 50.0        # cm/s
 ```
+
+### Gesture Training & Classification Parameters 
+```python
+#kNN classifier
+n_neighbors_base = 5          # requested k
+weights = "distance"          # distance-weighted voting
+metric = "euclidean"
+
+#training requirements       
+min_train_samples = 2
+
+# prediction thresholds
+static_conf_min_display = 0.90  # below this → "none"
+static_conf_min_commit = 0.85   # for state machine acceptance
+
+# gesture debounce
+gesture_confirm_time_s = 0.25
+```
+
+
 
 ## Troubleshooting
 
