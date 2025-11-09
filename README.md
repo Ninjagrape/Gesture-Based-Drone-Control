@@ -184,11 +184,21 @@ The system estimates 3D hand position from a single camera using geometric const
 
 **Algorithm**: K-Nearest Neighbors (KNN) with feature engineering
 
-**Features** (126 dimensions):
+**Features** 
 - Normalized 21-landmark positions (63D)
 - Pairwise distances between landmarks (21×20/2 = 210 pairs → reduced)
 - Finger extension state (5D)
 - Palm orientation normal vector (3D)
+
+***Dynamic Dataset***
+samples=293 
+feature_dims=77 
+classes=['CHANGE SPEED', 'GO', 'HOLD', 'ROTATE', 'STOP', 'TRANSLATE']
+
+***Static Dataset***
+samples=19259 
+feat_dim=74 
+classes=['CHANGE SPEED', 'GO', 'HOLD', 'ROTATE', 'STOP', 'TRANSLATE']
 
 **Classification**:
 - Static gestures: Spatial features only
