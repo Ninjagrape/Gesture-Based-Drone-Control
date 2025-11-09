@@ -3,6 +3,8 @@
 # Google Mediapipe will have yellow output. It will also return a classification report at the end with an analysis
 # of the accuracy for both "Hand" detected and "No Hand" detected categories
 
+# Insert this under main loop of two_stage_detection.py to set up the benchmark
+
 
 
 
