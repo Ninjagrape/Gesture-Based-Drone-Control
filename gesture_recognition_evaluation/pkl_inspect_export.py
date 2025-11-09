@@ -1,5 +1,5 @@
 #pkl_inspect_export.py
-# export training data and metadata from your saved knn pkl
+# export training data and metadata from saved pkl
 # works with payloads: {"scaler": StandardScaler, "clf": KNeighborsClassifier, "feature_dim": int}
 
 #USAGE:
