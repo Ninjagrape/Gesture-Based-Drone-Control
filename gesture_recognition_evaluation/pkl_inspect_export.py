@@ -5,6 +5,7 @@
 #USAGE:
 #python3 pkl_inspect_export.py
 
+#LIBRARIES--------------------------------------------
 import json
 import pickle as pkl
 from pathlib import Path
@@ -12,14 +13,13 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-# PKL_PATH = "gesture_dynamic.pkl"  
-# OUT_DIR  = Path("gesture_recognition_evaluation")
-
+#PATHS-------------------------------------------------
 BASE_DIR = Path(__file__).resolve().parent
 PKL_PATH = BASE_DIR.parent / "gesture_dynamic.pkl"  
 OUT_DIR  = BASE_DIR                                  
 
 
+#MAIN---------------------------------------------------
 def main():
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     
@@ -81,12 +81,12 @@ def main():
         "scaler_with_std": bool(getattr(scaler, "with_std", True)),
     }
     
+    #print meta data to json
     print(meta)
-    
     with open(OUT_DIR / "meta.json", "w") as f:
         json.dump(meta, f, indent=2)
 
-    # quick prints
+    #prints
     print(f"[ok] exported -> {OUT_DIR}/training_dynamic_unscaled.csv and training_dynamic_scaled.csv")
     print(f"[ok] meta     -> {OUT_DIR}/meta.json")
     print(f"[info] samples={meta['n_samples']} feat_dim={meta['feature_dim_detected']} classes={meta['classes']}")
