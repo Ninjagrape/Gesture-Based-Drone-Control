@@ -185,20 +185,21 @@ The system estimates 3D hand position from a single camera using geometric const
 **Algorithm**: K-Nearest Neighbors (KNN) with feature engineering
 
 **Features** 
+- 74 + 3 (velocity) dimensions
 - Normalized 21-landmark positions (63D)
 - Pairwise distances between landmarks (21×20/2 = 210 pairs → reduced)
 - Finger extension state (5D)
 - Palm orientation normal vector (3D)
 
-***Dynamic Dataset***
-samples=293 
-feature_dims=77 
-classes=['CHANGE SPEED', 'GO', 'HOLD', 'ROTATE', 'STOP', 'TRANSLATE']
-
 ***Static Dataset***
-samples=19259 
-feat_dim=74 
-classes=['CHANGE SPEED', 'GO', 'HOLD', 'ROTATE', 'STOP', 'TRANSLATE']
+- samples=19259 
+- features_dims=74 
+- classes=['CHANGE SPEED', 'GO', 'HOLD', 'ROTATE', 'STOP', 'TRANSLATE']
+  
+***Dynamic Dataset***
+- samples=293 
+- feature_dims=77 
+- classes=['CHANGE SPEED', 'GO', 'HOLD', 'ROTATE', 'STOP', 'TRANSLATE']
 
 **Classification**:
 - Static gestures: Spatial features only
@@ -325,10 +326,10 @@ max_velocity = 50.0        # cm/s
 
 ### Research Directions
 - [ ] Hand-object interaction detection
-- [ ] Adaptive thresholding based on user behavior
+- [ ] Adaptive thresholding based on user behaviour
 - [ ] Temporal gesture sequences (gesture phrases)
 - [ ] Transfer learning from pre-trained models
-- [ ] Real-time performance optimization (GPU acceleration)
+- [ ] Real-time performance optimisation (GPU acceleration)
 
 ## References
 
@@ -344,6 +345,12 @@ max_velocity = 50.0        # cm/s
 ## Authors
 
 Morris Lee
+The University of Sydney
+
+Marinelle Juan
+The University of Sydney
+
+Jarvis Du
 The University of Sydney
 
 ## License
